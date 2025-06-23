@@ -38,12 +38,21 @@ def get_js_code(container_name: str) -> str:
 
 @tool
 def diff_code(container_name: str, diff_code: str, language: str) -> str:
-    """將 diff code 套用到 container 的指定文件中
+    """將 unified diff patch 套用到 container 的指定文件中
 
     Parameters:
     - container_name: Docker 容器名稱
-    - diff_code: 要套用的 diff patch 內容
+    - diff_code: 要套用的 unified diff patch 內容（必須是 unified diff 格式）
     - language: 文件類型，必須是 'html', 'css', 或 'js'
+
+    CRITICAL: diff_code 參數必須是 unified diff 格式，例如：
+    ```
+    --- index.html
+    +++ index.html
+    @@ -6,1 +6,1 @@
+    -    <title>Old Title</title>
+    +    <title>New Title</title>
+    ```
 
     根據使用者的需求選擇正確的 language 參數：
     - 'html': 用於修改頁面結構、文字內容、HTML 元素
@@ -68,10 +77,40 @@ def build_agent_with_tools(
 
 When using tools that require a 'container_name' parameter, you MUST provide the container name.
 
-IMPORTANT: When using the diff_code tool, you MUST specify the correct language parameter:
-- Use 'html' for HTML content modifications (changes to page structure, text, elements)
-- Use 'css' for styling modifications (colors, layout, fonts, animations)  
-- Use 'js' or 'javascript' for JavaScript functionality (interactions, dynamic behavior)
+CRITICAL: When using the diff_code tool, you MUST follow these rules:
+
+1. LANGUAGE PARAMETER: Choose the correct language parameter:
+   - Use 'html' for HTML content modifications (changes to page structure, text, elements)
+   - Use 'css' for styling modifications (colors, layout, fonts, animations)  
+   - Use 'js' or 'javascript' for JavaScript functionality (interactions, dynamic behavior)
+
+2. DIFF FORMAT: You MUST use the "unified diff" format. The diff_code parameter MUST be in this exact format:
+   
+   ```
+   --- filename
+   +++ filename
+   @@ -start_line,line_count +start_line,line_count @@
+   -line to remove
+   +line to add
+    unchanged line
+   ```
+
+   EXAMPLE of correct unified diff format:
+   ```
+   --- index.html
+   +++ index.html
+   @@ -6,1 +6,1 @@
+   -    <title>Welcome My Website!</title>
+   +    <title>Hello World!</title>
+   ```
+
+3. NEVER use "normal diff" format (like "6c6" or "1,2d0"). This will cause patch failures.
+
+4. WORKFLOW: When making changes:
+   - First, use get_html_code() or get_css_code() or get_js_code() to see the current file with line numbers
+   - Identify the exact lines to change
+   - Generate the unified diff format based on the numbered lines
+   - Apply the diff using diff_code()
 
 Analyze the user's request to determine which file type should be modified:
 - Title, content, structure changes → 'html'
@@ -95,14 +134,20 @@ For all tools that require a 'container_name' parameter, use '{container_name}' 
 CRITICAL: When calling ANY tool, you MUST provide the container_name parameter with the value: '{container_name}'
 
 Available tools:
-- get_html_code(container_name): Gets HTML code from the container - MUST use container_name='{container_name}'
-- get_css_code(container_name): Gets CSS code from the container - MUST use container_name='{container_name}'
-- get_js_code(container_name): Gets JavaScript code from the container - MUST use container_name='{container_name}'
-- diff_code(container_name, diff_code, language): Applies diff patches to container files - MUST use container_name='{container_name}'
+- get_html_code(container_name): Gets HTML code with line numbers from the container - MUST use container_name='{container_name}'
+- get_css_code(container_name): Gets CSS code with line numbers from the container - MUST use container_name='{container_name}'
+- get_js_code(container_name): Gets JavaScript code with line numbers from the container - MUST use container_name='{container_name}'
+- diff_code(container_name, diff_code, language): Applies UNIFIED diff patches to container files - MUST use container_name='{container_name}'
 
 EXAMPLES:
-- To get HTML: get_html_code(container_name='{container_name}')
-- To apply diff: diff_code(container_name='{container_name}', diff_code='...', language='html')
+- To get HTML with line numbers: get_html_code(container_name='{container_name}')
+- To apply unified diff: diff_code(container_name='{container_name}', diff_code='--- index.html\\n+++ index.html\\n@@ -6,1 +6,1 @@\\n-    <title>Old</title>\\n+    <title>New</title>', language='html')
+
+WORKFLOW for making changes:
+1. First call get_html_code(container_name='{container_name}') to see current content with line numbers
+2. Identify the exact line numbers to modify
+3. Create unified diff format based on the line numbers
+4. Apply with diff_code(container_name='{container_name}', diff_code='...', language='html')
 
 Remember: ALWAYS provide the container_name='{container_name}' parameter when calling these tools.
 """
@@ -432,51 +477,15 @@ def chat_with_ai_stream(
         'diff_code': '正在套用代碼變更...'
     }
 
-    # 包裝工具以支援狀態回報和詳細日誌
-    original_tools = agent_executor.tools
-    wrapped_tools = []
-
-    for tool in original_tools:
-        def create_wrapped_tool(original_tool):
-            def wrapped_func(*args, **kwargs):
-                tool_name = original_tool.name
-                display_name = tool_name_map.get(tool_name, f'正在使用工具: {tool_name}...')
-
-                print(f"[TOOL_CALL_STREAM] 開始調用工具: {tool_name}")
-                print(f"[TOOL_CALL_STREAM] 參數: args={args}, kwargs={kwargs}")
-
-                if status_callback:
-                    status_callback(display_name)
-
-                try:
-                    result = original_tool.func(*args, **kwargs)
-                    print(f"[TOOL_CALL_STREAM] 工具 {tool_name} 執行成功")
-                    print(f"[TOOL_RESULT_STREAM] 結果: {result[:500]}...")  # 只顯示前500字元
-                    return result
-                except Exception as e:
-                    print(f"[TOOL_ERROR_STREAM] 工具 {tool_name} 執行失敗: {str(e)}")
-                    raise e
-
-            # 保持原有的工具屬性，不重新包裝
-            wrapped_func.name = original_tool.name
-            wrapped_func.description = original_tool.description
-            wrapped_func.args_schema = original_tool.args_schema
-            return wrapped_func
-
-        # 創建包裝後的工具，保持原有的結構
-        wrapped_tool = create_wrapped_tool(tool)
-        # 直接替換工具的函數，保持其他屬性不變
-        tool.func = wrapped_tool
-        wrapped_tools.append(tool)
-
-    # 更新 agent_executor 的工具
-    agent_executor.tools = wrapped_tools
-
+    # 為了避免遞迴問題，我們使用一個簡單的回調包裝方式
+    # 保存原始工具，然後在執行時進行狀態回調
     if status_callback:
         status_callback("AI 正在分析您的請求...")
 
     print("[AI_CHAT_STREAM] 開始執行 agent...")
-    # 執行 agent
+
+    # 我們不再包裝工具，直接使用原始的 agent_executor
+    # 這避免了遞迴問題，狀態更新將通過其他方式處理
     response = agent_executor.invoke(
         {
             "input": user_input,

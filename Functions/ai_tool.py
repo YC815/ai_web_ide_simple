@@ -13,7 +13,22 @@ def get_html_code(container_name: str):
     container = client.containers.get(container_name)
 
     result = container.exec_run("cat /usr/share/nginx/html/index.html")
-    return result.output.decode("utf-8")
+    content = result.output.decode("utf-8")
+
+    # 為每一行添加行數標記，保留所有空行
+    lines = content.splitlines(keepends=True)  # 保留換行符
+    numbered_lines = []
+
+    for i, line in enumerate(lines, 1):
+        # 移除末尾的換行符來顯示，但保留原始結構
+        line_content = line.rstrip('\n\r')
+        numbered_lines.append(f"{i:2d}: {line_content}")
+
+    # 如果原始內容為空或只有換行符，也要顯示行號
+    if not lines:
+        numbered_lines.append("1: ")
+
+    return '\n'.join(numbered_lines)
 
 
 def get_js_code(container_name: str):
@@ -21,7 +36,22 @@ def get_js_code(container_name: str):
     container = client.containers.get(container_name)
 
     result = container.exec_run("cat /usr/share/nginx/html/index.js")
-    return result.output.decode("utf-8")
+    content = result.output.decode("utf-8")
+
+    # 為每一行添加行數標記，保留所有空行
+    lines = content.splitlines(keepends=True)  # 保留換行符
+    numbered_lines = []
+
+    for i, line in enumerate(lines, 1):
+        # 移除末尾的換行符來顯示，但保留原始結構
+        line_content = line.rstrip('\n\r')
+        numbered_lines.append(f"{i:2d}: {line_content}")
+
+    # 如果原始內容為空或只有換行符，也要顯示行號
+    if not lines:
+        numbered_lines.append("1: ")
+
+    return '\n'.join(numbered_lines)
 
 
 def get_css_code(container_name: str):
@@ -29,7 +59,22 @@ def get_css_code(container_name: str):
     container = client.containers.get(container_name)
 
     result = container.exec_run("cat /usr/share/nginx/html/index.css")
-    return result.output.decode("utf-8")
+    content = result.output.decode("utf-8")
+
+    # 為每一行添加行數標記，保留所有空行
+    lines = content.splitlines(keepends=True)  # 保留換行符
+    numbered_lines = []
+
+    for i, line in enumerate(lines, 1):
+        # 移除末尾的換行符來顯示，但保留原始結構
+        line_content = line.rstrip('\n\r')
+        numbered_lines.append(f"{i:2d}: {line_content}")
+
+    # 如果原始內容為空或只有換行符，也要顯示行號
+    if not lines:
+        numbered_lines.append("1: ")
+
+    return '\n'.join(numbered_lines)
 
 
 def create_tar_from_file(filepath: str, arcname: str) -> bytes:
@@ -38,6 +83,40 @@ def create_tar_from_file(filepath: str, arcname: str) -> bytes:
         tar.add(filepath, arcname=arcname)
     tar_stream.seek(0)
     return tar_stream.read()
+
+
+def diagnose_patch_failure(container, target_file_path, diff_code, log_print):
+    """診斷 patch 失敗的原因並提供詳細資訊"""
+    try:
+        # 獲取實際文件內容
+        actual_result = container.exec_run(f"cat {target_file_path}")
+        if actual_result.exit_code != 0:
+            log_print(f"[DIAGNOSE] 無法讀取目標文件: {actual_result.output.decode('utf-8')}")
+            return
+
+        actual_content = actual_result.output.decode('utf-8')
+        actual_lines = actual_content.splitlines()
+
+        log_print(f"[DIAGNOSE] 實際文件內容 ({len(actual_lines)} 行):")
+        for i, line in enumerate(actual_lines, 1):
+            log_print(f"[DIAGNOSE] {i:2d}: {repr(line)}")
+
+        # 分析 diff 內容
+        log_print(f"[DIAGNOSE] Diff 內容分析:")
+        diff_lines = diff_code.split('\n')
+        for i, line in enumerate(diff_lines):
+            if line.startswith('@@'):
+                log_print(f"[DIAGNOSE] Hunk 標頭: {line}")
+            elif line.startswith('-') and not line.startswith('---'):
+                log_print(f"[DIAGNOSE] 要移除的行: {repr(line[1:])}")
+            elif line.startswith('+') and not line.startswith('+++'):
+                log_print(f"[DIAGNOSE] 要新增的行: {repr(line[1:])}")
+
+        # 檢查檔案行數是否匹配
+        log_print(f"[DIAGNOSE] 文件統計: 實際行數 {len(actual_lines)}")
+
+    except Exception as e:
+        log_print(f"[DIAGNOSE] 診斷過程發生錯誤: {str(e)}")
 
 
 def diff_code(container_name: str, diff_code: str, language: str) -> str:
@@ -176,7 +255,26 @@ def diff_code(container_name: str, diff_code: str, language: str) -> str:
             if patch_result.exit_code == 0:
                 log_print(f"[DEBUG] Patch 檔案內容:\n{patch_result.output.decode('utf-8')}")
 
-            return f"{error_msg}\n\n[除錯日誌]\n{log_capture.getvalue()}"
+                # 執行詳細診斷
+            log_print("[DEBUG] 開始執行詳細診斷...")
+            diagnose_patch_failure(container, target_file_path, diff_code, log_print)
+
+            # 向AI提供清晰的錯誤訊息和修正建議
+            suggestion_msg = f"""
+[💡 修正建議]
+1. 請檢查diff中的行號是否與實際文件匹配
+2. 請確認要修改的文字內容是否存在於文件中
+3. 建議重新獲取文件內容後再生成新的diff
+4. 如果是簡單的文字替換，請使用更精確的行號定位
+
+[📋 建議步驟]
+1. 先使用 get_{language}_code() 獲取最新文件內容
+2. 確認要修改的具體行號和內容
+3. 重新生成正確的diff patch
+"""
+            log_print(suggestion_msg)
+
+            return f"{error_msg}\n{suggestion_msg}\n\n[除錯日誌]\n{log_capture.getvalue()}"
 
         # 實際執行 patch
         log_print("[DEBUG] Dry-run 成功，開始實際套用 patch...")
@@ -190,10 +288,41 @@ def diff_code(container_name: str, diff_code: str, language: str) -> str:
         if apply_result.exit_code == 0:
             success_msg = f"[✅ PATCH 套用成功]\n{apply_result.output.decode('utf-8').strip()}"
             log_print(success_msg)
-            return f"{success_msg}\n\n[除錯日誌]\n{log_capture.getvalue()}"
+
+            # 自動獲取最新代碼狀態
+            log_print("[DEBUG] 開始獲取最新代碼狀態...")
+            try:
+                # 根據語言類型調用對應的get函數
+                language_lower = language.lower()
+                if language_lower == 'html':
+                    latest_code = get_html_code(container_name)
+                    log_print("[DEBUG] 成功獲取最新 HTML 代碼")
+                elif language_lower in ['css']:
+                    latest_code = get_css_code(container_name)
+                    log_print("[DEBUG] 成功獲取最新 CSS 代碼")
+                elif language_lower in ['js', 'javascript']:
+                    latest_code = get_js_code(container_name)
+                    log_print("[DEBUG] 成功獲取最新 JavaScript 代碼")
+                else:
+                    latest_code = "[ERROR] 無法識別的語言類型"
+                    log_print(f"[ERROR] 無法識別的語言類型: {language}")
+
+                # 返回成功訊息和最新代碼
+                final_result = f"{success_msg}\n\n[📄 最新 {language.upper()} 代碼]\n{latest_code}\n\n[除錯日誌]\n{log_capture.getvalue()}"
+                return final_result
+
+            except Exception as e:
+                error_msg = f"[❌ 獲取最新代碼失敗] {str(e)}"
+                log_print(error_msg)
+                return f"{success_msg}\n\n{error_msg}\n\n[除錯日誌]\n{log_capture.getvalue()}"
         else:
             error_msg = f"[❌ PATCH 套用失敗]\n退出碼: {apply_result.exit_code}\n輸出: {apply_result.output.decode('utf-8').strip()}"
             log_print(error_msg)
+
+            # 執行詳細診斷
+            log_print("[DEBUG] 開始執行詳細診斷...")
+            diagnose_patch_failure(container, target_file_path, diff_code, log_print)
+
             return f"{error_msg}\n\n[除錯日誌]\n{log_capture.getvalue()}"
 
     except docker.errors.APIError as e:

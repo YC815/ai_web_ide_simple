@@ -6,7 +6,7 @@ from langchain.agents.agent import AgentExecutor
 from langchain.tools import tool
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from . import ai_tool
-
+from . import diff_tool
 import sqlite3
 from typing import List, Optional, Tuple
 
@@ -59,7 +59,7 @@ def diff_code(container_name: str, diff_code: str, language: str) -> str:
     - 'css': 用於修改樣式、顏色、佈局、字體等視覺效果
     - 'js': 用於修改 JavaScript 功能、互動行為、動態效果
     """
-    return ai_tool.diff_code(container_name, diff_code, language)
+    return diff_tool.diff_code(container_name, diff_code, language)
 
 
 # ---------- Tool & Agent Management ---------- #
@@ -529,9 +529,19 @@ def chat_with_ai_stream(
 
     return ai_response
 
+
+def get_latest_user_message(session_id: str, project_name: Optional[str] = None) -> Optional[str]:
+    """
+    從 chat_history 中抓取最新一筆 HumanMessage（使用者輸入）
+    """
+    history = load_chat_history(session_id, project_name)
+    for msg in reversed(history):
+        if isinstance(msg, HumanMessage):
+            return msg.content
+    return None
+
+
 # ---------- 測試入口 ---------- #
-
-
 if __name__ == "__main__":
     print("💬 AI Chat CLI")
     print("輸入你想問的內容，輸入 `exit` 離開對話。")

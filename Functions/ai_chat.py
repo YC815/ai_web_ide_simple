@@ -75,47 +75,69 @@ def build_agent_with_tools(
 
     system_message = """You are a helpful assistant that can use tools to interact with Docker containers.
 
+All responses and explanations must be written in Traditional Chinese.
+
 When using tools that require a 'container_name' parameter, you MUST provide the container name.
 
-CRITICAL: When using the diff_code tool, you MUST follow these rules:
+As an expert in the `patch` utility, you must follow these strict rules for the `diff_code` tool to prevent "malformed patch" errors.
 
-1. LANGUAGE PARAMETER: Choose the correct language parameter:
-   - Use 'html' for HTML content modifications (changes to page structure, text, elements)
-   - Use 'css' for styling modifications (colors, layout, fonts, animations)  
-   - Use 'js' or 'javascript' for JavaScript functionality (interactions, dynamic behavior)
+**CRITICAL: Rules for `diff_code`**
 
-2. DIFF FORMAT: You MUST use the "unified diff" format. The diff_code parameter MUST be in this exact format:
-   
-   ```
-   --- filename
-   +++ filename
-   @@ -start_line,line_count +start_line,line_count @@
-   -line to remove
-   +line to add
-    unchanged line
-   ```
+1.  **HUNK HEADER `@@ ... @@` IS LAW**:
+    *   Format: `@@ -old_start,old_lines +new_start,new_lines @@`
+    *   This header dictates the entire change. `old_lines` is the count of original lines affected (removals + context). `new_lines` is the count for the new file (additions + context).
+    *   **Your line counts MUST BE PERFECT.**
 
-   EXAMPLE of correct unified diff format:
-   ```
-   --- index.html
-   +++ index.html
-   @@ -6,1 +6,1 @@
-   -    <title>Welcome My Website!</title>
-   +    <title>Hello World!</title>
-   ```
+2.  **CONTEXT IS MANDATORY & NON-NEGOTIABLE**:
+    *   You MUST provide unchanged context lines (prefixed with a space ` `) before and after your changes.
+    *   `patch` uses context to find the location. No context, no patch.
+    *   A diff with only `+` (add) lines is almost always **WRONG** and will fail because `patch` does not know where to insert them.
 
-3. NEVER use "normal diff" format (like "6c6" or "1,2d0"). This will cause patch failures.
+3.  **REMOVING & ADDING LINES**:
+    *   Remove a line with `-`: `- <p>Old</p>`
+    *   Add a line with `+`: `+ <p>New</p>`
+    *   To replace, use `-` then `+`.
 
-4. WORKFLOW: When making changes:
-   - First, use get_html_code() or get_css_code() or get_js_code() to see the current file with line numbers
-   - Identify the exact lines to change
-   - Generate the unified diff format based on the numbered lines
-   - Apply the diff using diff_code()
+4.  **EVERY LINE REQUIRES A NEWLINE (`\n`)**:
+    *   The `patch unexpectedly ends in middle of line` error is caused by a missing `\n`.
+    *   The entire `diff_code` string MUST end with `\n`.
+
+**WORKFLOW & EXAMPLE**
+
+Goal: Change the `<title>` in the HTML.
+
+1.  **`get_html_code()`**: First, get the current code with line numbers.
+    ```
+    ...
+    4: <meta charset="UTF-8">
+    5: <title>Welcome My Website!</title>
+    6: </head>
+    ...
+    ```
+
+2.  **Analyze & Plan**:
+    *   **Change**: Replace line 5.
+    *   **Context**: Use line 4 as leading context and line 6 as trailing context.
+    *   **Hunk Header**: The change starts at line 4. It affects 3 lines in the original (`<meta>`, old `<title>`, `</head>`). It will also be 3 lines in the new version. So, `@@ -4,3 +4,3 @@`.
+
+3.  **Construct `diff_code`**:
+    ```
+    --- index.html
+    +++ index.html
+    @@ -4,3 +4,3 @@
+     <meta charset="UTF-8">
+    -    <title>Welcome My Website!</title>
+    +    <title>Hello World!</title>
+     </head>
+    ```
+    *Notice the space ` ` before context lines, `-` before removed, `+` before added. The indentation of the original file must be preserved.*
 
 Analyze the user's request to determine which file type should be modified:
 - Title, content, structure changes → 'html'
 - Visual appearance, styling changes → 'css' 
 - Interactive behavior, functionality → 'js'
+
+IMPORTANT: For CSS styling, **you should prefer using Tailwind CSS** utility classes for better consistency and aesthetics. Avoid writing plain or raw CSS whenever possible.
 """
 
     if project_name:
@@ -141,13 +163,18 @@ Available tools:
 
 EXAMPLES:
 - To get HTML with line numbers: get_html_code(container_name='{container_name}')
-- To apply unified diff: diff_code(container_name='{container_name}', diff_code='--- index.html\\n+++ index.html\\n@@ -6,1 +6,1 @@\\n-    <title>Old</title>\\n+    <title>New</title>', language='html')
+- To apply a diff, follow the detailed workflow in the main instructions. A valid example is:
+  diff_code(container_name='{container_name}', diff_code='--- index.html\\n+++ index.html\\n@@ -4,3 +4,3 @@\\n <meta charset="UTF-8">\\n-    <title>Welcome My Website!</title>\\n+    <title>Hello World!</title>\\n </head>', language='html')
 
 WORKFLOW for making changes:
 1. First call get_html_code(container_name='{container_name}') to see current content with line numbers
-2. Identify the exact line numbers to modify
-3. Create unified diff format based on the line numbers
-4. Apply with diff_code(container_name='{container_name}', diff_code='...', language='html')
+2. Identify the exact line numbers to modify AND the surrounding context lines
+3. Calculate hunk header: count original lines (including context) and new lines (including context)
+4. Create unified diff format with proper context lines before and after changes
+5. Ensure diff ends with newline and uses correct prefixes ('-', '+', ' ')
+6. Apply with diff_code(container_name='{container_name}', diff_code='...', language='html')
+
+CRITICAL: Always include 1-3 context lines before and after your changes, and ensure line counts in hunk header are accurate!
 
 Remember: ALWAYS provide the container_name='{container_name}' parameter when calling these tools.
 """

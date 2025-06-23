@@ -115,6 +115,9 @@ def list_todo(latest_input):
     return results
 
 
+def create_diff(container_name, todo_list): pass
+
+
 def run_sub_agent_edit_task(container_name, latest_input):
     todo_list = list_todo(latest_input)
 

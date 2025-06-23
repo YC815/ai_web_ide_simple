@@ -10,7 +10,9 @@ def get_containers():
     containers = client.containers.list(all=True)
     container_list = []
     for container in containers:
-        container_list.append(container.name, container.status, container.id, "\n")
+        container_list.append(
+            {"name": container.name, "status": container.status, "id": container.id}
+        )
     return container_list
 
 
@@ -73,4 +75,5 @@ COPY . /usr/share/nginx/html
     )
 
     print(f"✅ {container_id} is running at http://localhost:{port}")
+    shutil.rmtree(project_dir)
     return container

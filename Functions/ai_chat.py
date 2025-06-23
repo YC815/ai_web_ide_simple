@@ -8,7 +8,7 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from . import ai_tool
 
 import sqlite3
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 import os
@@ -38,7 +38,18 @@ def get_js_code(container_name: str) -> str:
 
 @tool
 def diff_code(container_name: str, diff_code: str, language: str) -> str:
-    """將 diff code 套用到 container 的指定語言目錄中"""
+    """將 diff code 套用到 container 的指定文件中
+
+    Parameters:
+    - container_name: Docker 容器名稱
+    - diff_code: 要套用的 diff patch 內容
+    - language: 文件類型，必須是 'html', 'css', 或 'js'
+
+    根據使用者的需求選擇正確的 language 參數：
+    - 'html': 用於修改頁面結構、文字內容、HTML 元素
+    - 'css': 用於修改樣式、顏色、佈局、字體等視覺效果
+    - 'js': 用於修改 JavaScript 功能、互動行為、動態效果
+    """
     return ai_tool.diff_code(container_name, diff_code, language)
 
 
@@ -48,25 +59,104 @@ def get_registered_tools() -> List[BaseTool]:
     return [get_html_code, get_css_code, get_js_code, diff_code]
 
 
-def build_agent_with_tools(tools: List[BaseTool]) -> AgentExecutor:
+def build_agent_with_tools(
+    tools: List[BaseTool], project_name: Optional[str] = None
+) -> AgentExecutor:
     llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=os.getenv("OPENAI_API_KEY"))
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a helpful assistant that can use tools."),
-        MessagesPlaceholder("chat_history", optional=True),
-        ("human", "{input}"),
-        MessagesPlaceholder("agent_scratchpad")
-    ])
+    system_message = """You are a helpful assistant that can use tools to interact with Docker containers.
+
+When using tools that require a 'container_name' parameter, you MUST provide the container name.
+
+IMPORTANT: When using the diff_code tool, you MUST specify the correct language parameter:
+- Use 'html' for HTML content modifications (changes to page structure, text, elements)
+- Use 'css' for styling modifications (colors, layout, fonts, animations)  
+- Use 'js' or 'javascript' for JavaScript functionality (interactions, dynamic behavior)
+
+Analyze the user's request to determine which file type should be modified:
+- Title, content, structure changes → 'html'
+- Visual appearance, styling changes → 'css' 
+- Interactive behavior, functionality → 'js'
+"""
+
+    if project_name:
+        # 智能處理容器名稱 - 如果 project_name 已經包含完整的容器名稱，直接使用
+        if project_name.startswith('ai-web-ide_') and project_name.endswith('_container'):
+            container_name = project_name
+            print(f"[AGENT_BUILD] 使用完整容器名稱: {container_name}")
+        else:
+            container_name = f'ai-web-ide_{project_name}_container'
+            print(f"[AGENT_BUILD] 生成容器名稱: {container_name} (來自專案: {project_name})")
+
+        system_message += f"""
+You are currently working on the project '{project_name}'.
+For all tools that require a 'container_name' parameter, use '{container_name}' as the container name.
+
+CRITICAL: When calling ANY tool, you MUST provide the container_name parameter with the value: '{container_name}'
+
+Available tools:
+- get_html_code(container_name): Gets HTML code from the container - MUST use container_name='{container_name}'
+- get_css_code(container_name): Gets CSS code from the container - MUST use container_name='{container_name}'
+- get_js_code(container_name): Gets JavaScript code from the container - MUST use container_name='{container_name}'
+- diff_code(container_name, diff_code, language): Applies diff patches to container files - MUST use container_name='{container_name}'
+
+EXAMPLES:
+- To get HTML: get_html_code(container_name='{container_name}')
+- To apply diff: diff_code(container_name='{container_name}', diff_code='...', language='html')
+
+Remember: ALWAYS provide the container_name='{container_name}' parameter when calling these tools.
+"""
+    else:
+        system_message += """
+No project is currently selected. You need to ask the user for the project name or container name before using any tools.
+"""
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", system_message),
+            MessagesPlaceholder("chat_history", optional=True),
+            ("human", "{input}"),
+            MessagesPlaceholder("agent_scratchpad"),
+        ]
+    )
 
     agent = create_openai_functions_agent(llm=llm, tools=tools, prompt=prompt)
     return AgentExecutor(agent=agent, tools=tools)
 
 
+# ---------- 專案相關的 session 管理 ---------- #
+
+def create_project_session_id(session_id: str, project_name: Optional[str] = None) -> str:
+    """
+    建立專案特定的 session ID
+    格式：project_name::session_id 或直接使用 session_id（如果沒有專案名稱）
+    """
+    if project_name:
+        return f"{project_name}::{session_id}"
+    return session_id
+
+
+def parse_project_session_id(full_session_id: str) -> Tuple[Optional[str], str]:
+    """
+    解析專案 session ID
+    回傳：(project_name, session_id)
+    """
+    if "::" in full_session_id:
+        project_name, session_id = full_session_id.split("::", 1)
+        return project_name, session_id
+    return None, full_session_id
+
+
 # ---------- SQLite Chat History ---------- #
 
-def init_chat_session(session_id: str) -> None:
+def init_chat_session(session_id: str, project_name: Optional[str] = None) -> None:
+    """初始化聊天 session，支援專案分離"""
+    full_session_id = create_project_session_id(session_id, project_name)
+
     conn = sqlite3.connect("chat_history.db")
     c = conn.cursor()
+
+    # 創建訊息表（如果不存在）
     c.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,29 +166,54 @@ def init_chat_session(session_id: str) -> None:
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # 檢查是否需要添加 project_name 欄位（資料庫遷移）
+    try:
+        c.execute("SELECT project_name FROM messages LIMIT 1")
+    except sqlite3.OperationalError:
+        # project_name 欄位不存在，需要添加
+        print("[INFO] 升級資料庫結構：添加 project_name 欄位")
+        c.execute("ALTER TABLE messages ADD COLUMN project_name TEXT")
+        conn.commit()
+
+    # 檢查 session 是否已存在
+    c.execute("SELECT 1 FROM messages WHERE session_id = ?", (full_session_id,))
+    if c.fetchone() is None:
+        # 初始化新的 session
+        c.execute(
+            "INSERT INTO messages (session_id, project_name, role, content) VALUES (?, ?, ?, ?)",
+            (full_session_id, project_name, "system", f"Session initialized for project: {project_name or 'default'}"),
+        )
+
     conn.commit()
     conn.close()
 
 
-def save_message_to_db(session_id: str, role: str, content: str) -> None:
+def save_message_to_db(session_id: str, role: str, content: str, project_name: Optional[str] = None) -> None:
+    """儲存訊息到資料庫，支援專案分離"""
+    full_session_id = create_project_session_id(session_id, project_name)
+
     conn = sqlite3.connect("chat_history.db")
     c = conn.cursor()
     c.execute("""
-        INSERT INTO messages (session_id, role, content)
-        VALUES (?, ?, ?)
-    """, (session_id, role, content))
+        INSERT INTO messages (session_id, project_name, role, content)
+        VALUES (?, ?, ?, ?)
+    """, (full_session_id, project_name, role, content))
     conn.commit()
     conn.close()
 
 
-def load_chat_history(session_id: str) -> List[BaseMessage]:
+def load_chat_history(session_id: str, project_name: Optional[str] = None) -> List[BaseMessage]:
+    """載入聊天歷史，支援專案分離"""
+    full_session_id = create_project_session_id(session_id, project_name)
+
     conn = sqlite3.connect("chat_history.db")
     c = conn.cursor()
     c.execute("""
         SELECT role, content FROM messages
         WHERE session_id = ?
         ORDER BY timestamp ASC
-    """, (session_id,))
+    """, (full_session_id,))
     rows = c.fetchall()
     conn.close()
 
@@ -111,28 +226,272 @@ def load_chat_history(session_id: str) -> List[BaseMessage]:
     return messages
 
 
+def get_all_sessions() -> List[dict]:
+    """從資料庫中取得所有 session，按專案分組並按最後訊息時間排序，只包含有真正對話內容的 session"""
+    conn = sqlite3.connect("chat_history.db")
+    c = conn.cursor()
+    try:
+        # 修改查詢條件，排除只有 system 訊息的 session
+        c.execute("""
+            SELECT session_id, project_name, MAX(timestamp) as last_message_time
+            FROM messages
+            WHERE role != 'system'
+            GROUP BY session_id
+            HAVING COUNT(*) > 0
+            ORDER BY last_message_time DESC
+        """)
+        rows = c.fetchall()
+
+        sessions = []
+        for session_id, project_name, last_message_time in rows:
+            # 解析 session_id 來取得原始的 session_id
+            parsed_project, parsed_session = parse_project_session_id(session_id)
+
+            sessions.append({
+                'session_id': parsed_session,
+                'full_session_id': session_id,
+                'project_name': project_name or parsed_project,
+                'last_message_time': last_message_time
+            })
+
+        return sessions
+    except sqlite3.OperationalError:
+        # 如果資料庫或資料表不存在，回傳空列表
+        return []
+    finally:
+        conn.close()
+
+
+def get_sessions_by_project(project_name: str) -> List[dict]:
+    """取得特定專案的所有 session，只包含有真正對話內容的 session"""
+    conn = sqlite3.connect("chat_history.db")
+    c = conn.cursor()
+    try:
+        # 修改查詢條件，排除只有 system 訊息的 session
+        c.execute("""
+            SELECT session_id, MAX(timestamp) as last_message_time
+            FROM messages
+            WHERE project_name = ? AND role != 'system'
+            GROUP BY session_id
+            HAVING COUNT(*) > 0
+            ORDER BY last_message_time DESC
+        """, (project_name,))
+        rows = c.fetchall()
+
+        sessions = []
+        for session_id, last_message_time in rows:
+            # 解析 session_id 來取得原始的 session_id
+            _, parsed_session = parse_project_session_id(session_id)
+
+            sessions.append({
+                'session_id': parsed_session,
+                'full_session_id': session_id,
+                'project_name': project_name,
+                'last_message_time': last_message_time
+            })
+
+        return sessions
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+
+
+def delete_session(session_id: str, project_name: Optional[str] = None) -> None:
+    """從資料庫中刪除指定 session 的所有訊息，支援專案分離"""
+    full_session_id = create_project_session_id(session_id, project_name)
+
+    conn = sqlite3.connect("chat_history.db")
+    c = conn.cursor()
+    c.execute("DELETE FROM messages WHERE session_id = ?", (full_session_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_project_list() -> List[str]:
+    """取得所有有聊天記錄的專案列表"""
+    conn = sqlite3.connect("chat_history.db")
+    c = conn.cursor()
+    try:
+        c.execute("""
+            SELECT DISTINCT project_name
+            FROM messages
+            WHERE project_name IS NOT NULL AND project_name != ''
+            ORDER BY project_name
+        """)
+        rows = c.fetchall()
+        return [row[0] for row in rows if row[0]]
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+
+
 # ---------- 主聊天流程 ---------- #
 
-def chat_with_ai(user_input: str, session_id: str) -> str:
-    init_chat_session(session_id)
+def chat_with_ai(
+    user_input: str, session_id: str, project_name: Optional[str] = None
+) -> str:
+    """主聊天函數，支援專案分離"""
+    print(f"[AI_CHAT] 開始處理聊天請求 - 專案: {project_name}")
 
+    # 初始化 session（包含專案資訊）
+    init_chat_session(session_id, project_name)
+
+    # 取得歷史訊息（專案特定）
+    history = load_chat_history(session_id, project_name)
+    print(f"[AI_CHAT] 載入聊天歷史，共 {len(history)} 條訊息")
+
+    # 建立 agent
     tools = get_registered_tools()
-    agent = build_agent_with_tools(tools)
+    print(f"[AI_CHAT] 建立 agent，可用工具: {[tool.name for tool in tools]}")
 
-    history = load_chat_history(session_id)
-    history.append(HumanMessage(content=user_input))
+    agent_executor = build_agent_with_tools(tools, project_name)
 
-    result = agent.invoke({
-        "input": user_input,
-        "chat_history": history
-    })
+    # 包裝工具以捕獲調用過程
+    original_tools = agent_executor.tools
+    wrapped_tools = []
 
-    output = result.get("output", "")
+    for tool in original_tools:
+        def create_wrapped_tool(original_tool):
+            def wrapped_func(*args, **kwargs):
+                print(f"[TOOL_CALL] 開始調用工具: {original_tool.name}")
+                print(f"[TOOL_CALL] 參數: args={args}, kwargs={kwargs}")
+                try:
+                    result = original_tool.func(*args, **kwargs)
+                    print(f"[TOOL_CALL] 工具 {original_tool.name} 執行成功")
+                    print(f"[TOOL_RESULT] 結果: {result[:500]}...")  # 只顯示前500字元，避免過長
+                    return result
+                except Exception as e:
+                    print(f"[TOOL_ERROR] 工具 {original_tool.name} 執行失敗: {str(e)}")
+                    raise e
 
-    save_message_to_db(session_id, "user", user_input)
-    save_message_to_db(session_id, "ai", output)
+            # 保持原有的工具屬性
+            wrapped_func.name = original_tool.name
+            wrapped_func.description = original_tool.description
+            return wrapped_func
 
-    return output
+        # 建立包裝後的工具
+        from langchain.tools import tool as tool_decorator
+        wrapped_tool = tool_decorator(
+            description=tool.description
+        )(create_wrapped_tool(tool))
+        # 手動設定工具名稱
+        wrapped_tool.name = tool.name
+        wrapped_tools.append(wrapped_tool)
+
+    # 更新 agent_executor 的工具
+    agent_executor.tools = wrapped_tools
+
+    print("[AI_CHAT] 開始執行 agent...")
+    # 執行 agent
+    response = agent_executor.invoke(
+        {
+            "input": user_input,
+            "chat_history": history,
+        }
+    )
+
+    # 儲存 AI 回覆（包含專案資訊）
+    ai_response = response.get("output", "")
+    print(f"[AI_CHAT] Agent 執行完成，回應長度: {len(ai_response)} 字元")
+
+    save_message_to_db(session_id, "user", user_input, project_name)
+    save_message_to_db(session_id, "ai", ai_response, project_name)
+
+    return ai_response
+
+
+def chat_with_ai_stream(
+    user_input: str,
+    session_id: str,
+    project_name: Optional[str] = None,
+    status_callback=None
+) -> str:
+    """主聊天函數，支援專案分離和狀態回調"""
+    print(f"[AI_CHAT_STREAM] 開始處理 streaming 聊天請求 - 專案: {project_name}")
+
+    # 初始化 session（包含專案資訊）
+    init_chat_session(session_id, project_name)
+
+    # 取得歷史訊息（專案特定）
+    history = load_chat_history(session_id, project_name)
+    print(f"[AI_CHAT_STREAM] 載入聊天歷史，共 {len(history)} 條訊息")
+
+    # 建立 agent
+    tools = get_registered_tools()
+    print(f"[AI_CHAT_STREAM] 建立 agent，可用工具: {[tool.name for tool in tools]}")
+
+    agent_executor = build_agent_with_tools(tools, project_name)
+
+    # 建立工具名稱映射表
+    tool_name_map = {
+        'get_html_code': '正在讀取 HTML 代碼...',
+        'get_css_code': '正在讀取 CSS 代碼...',
+        'get_js_code': '正在讀取 JavaScript 代碼...',
+        'diff_code': '正在套用代碼變更...'
+    }
+
+    # 包裝工具以支援狀態回報和詳細日誌
+    original_tools = agent_executor.tools
+    wrapped_tools = []
+
+    for tool in original_tools:
+        def create_wrapped_tool(original_tool):
+            def wrapped_func(*args, **kwargs):
+                tool_name = original_tool.name
+                display_name = tool_name_map.get(tool_name, f'正在使用工具: {tool_name}...')
+
+                print(f"[TOOL_CALL_STREAM] 開始調用工具: {tool_name}")
+                print(f"[TOOL_CALL_STREAM] 參數: args={args}, kwargs={kwargs}")
+
+                if status_callback:
+                    status_callback(display_name)
+
+                try:
+                    result = original_tool.func(*args, **kwargs)
+                    print(f"[TOOL_CALL_STREAM] 工具 {tool_name} 執行成功")
+                    print(f"[TOOL_RESULT_STREAM] 結果: {result[:500]}...")  # 只顯示前500字元
+                    return result
+                except Exception as e:
+                    print(f"[TOOL_ERROR_STREAM] 工具 {tool_name} 執行失敗: {str(e)}")
+                    raise e
+
+            # 保持原有的工具屬性，不重新包裝
+            wrapped_func.name = original_tool.name
+            wrapped_func.description = original_tool.description
+            wrapped_func.args_schema = original_tool.args_schema
+            return wrapped_func
+
+        # 創建包裝後的工具，保持原有的結構
+        wrapped_tool = create_wrapped_tool(tool)
+        # 直接替換工具的函數，保持其他屬性不變
+        tool.func = wrapped_tool
+        wrapped_tools.append(tool)
+
+    # 更新 agent_executor 的工具
+    agent_executor.tools = wrapped_tools
+
+    if status_callback:
+        status_callback("AI 正在分析您的請求...")
+
+    print("[AI_CHAT_STREAM] 開始執行 agent...")
+    # 執行 agent
+    response = agent_executor.invoke(
+        {
+            "input": user_input,
+            "chat_history": history,
+        }
+    )
+
+    # 儲存 AI 回覆（包含專案資訊）
+    ai_response = response.get("output", "")
+    print(f"[AI_CHAT_STREAM] Agent 執行完成，回應長度: {len(ai_response)} 字元")
+
+    save_message_to_db(session_id, "user", user_input, project_name)
+    save_message_to_db(session_id, "ai", ai_response, project_name)
+
+    return ai_response
 
 # ---------- 測試入口 ---------- #
 
@@ -145,7 +504,11 @@ if __name__ == "__main__":
     if not session_id:
         session_id = "default-session"
 
-    print(f"開始對話，session: {session_id}")
+    project_name = input("請輸入專案名稱（可選，按 Enter 跳過）: ").strip()
+    if not project_name:
+        project_name = None
+
+    print(f"開始對話，session: {session_id}, 專案: {project_name or '無'}")
     print("-" * 40)
 
     while True:
@@ -155,7 +518,7 @@ if __name__ == "__main__":
             break
 
         try:
-            ai_response = chat_with_ai(user_input, session_id)
+            ai_response = chat_with_ai(user_input, session_id, project_name)
             print(f"🤖 AI：{ai_response}\n")
         except Exception as e:
             print(f"⚠️ 發生錯誤：{e}")

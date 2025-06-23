@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Chat - {{ current_session[:8] }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    />
+    <style>
+      /* 載入點動畫效果 */
+      @keyframes loading-dots {
+        0%,
+        20% {
+          opacity: 0.2;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1.2);
+        }
+        100% {
+          opacity: 0.2;
+          transform: scale(1);
+        }
+      }
+
+      .loading-dot {
+        animation: loading-dots 1.4s infinite ease-in-out;
+      }
+
+      .loading-dot:nth-child(1) {
+        animation-delay: 0s;
+      }
+      .loading-dot:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+      .loading-dot:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-100 text-gray-800 font-sans flex h-screen antialiased">
+    <!-- Sidebar -->
+    <div
+      class="w-1/4 bg-white p-4 flex flex-col h-full border-r border-gray-200"
+    >
+      <!-- Sidebar Header -->
+      <div class="flex items-center justify-between mb-6 shrink-0">
+        <a
+          href="{{ url_for('exit_project') }}"
+          class="text-lg font-bold flex items-center text-gray-800 hover:text-blue-500 transition-colors duration-200"
+        >
+          <i class="fas fa-arrow-left mr-3"></i>
+          <span>回到首頁</span>
+        </a>
+        <a
+          href="{{ url_for('new_session_with_project') }}"
+          class="p-2 rounded-md text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-colors duration-200"
+          title="開啟新對話"
+        >
+          <i class="fas fa-plus"></i>
+        </a>
+      </div>
+
+      <!-- Chat List -->
+      <nav class="overflow-y-auto flex-grow">
+        <ul id="session-list">
+          {% for session in sessions %}
+          <li class="mb-2" data-session-id="{{ session.session_id }}">
+            <div class="group relative">
+              <a
+                href="{{ url_for('chat_session', session_id=session.session_id) }}"
+                class="block w-full p-3 rounded-md truncate transition-colors duration-200 {% if session.session_id == current_session %}bg-blue-500 text-white shadow-md{% else %}text-gray-600 hover:bg-gray-100 hover:text-gray-900{% endif %}"
+              >
+                <i class="fas fa-comment mr-3"></i>
+                {{ session.session_id[:24] }}
+              </a>
+              <button
+                class="delete-session-btn absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center justify-center w-7 h-7 rounded-full {% if session.session_id == current_session %}text-blue-200 hover:bg-blue-600 hover:text-white{% else %}text-gray-400 hover:bg-gray-200 hover:text-gray-800{% endif %}"
+                title="刪除此對話"
+              >
+                <i class="fas fa-trash-alt fa-sm"></i>
+              </button>
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+      </nav>
+    </div>
+
+    <!-- Main Chat Area -->
+    <div class="w-3/4 flex flex-col h-full">
+      <!-- Chat Header -->
+      <header
+        class="bg-white p-4 border-b border-gray-200 shrink-0 flex justify-between items-center"
+      >
+        {% if project_name %}
+        <div class="flex items-center">
+          <h1 class="text-xl font-semibold text-gray-800">
+            專案: {{ project_name }}
+          </h1>
+          <a
+            href="http://localhost:{{ project_port }}"
+            target="_blank"
+            class="ml-4 flex items-center px-3 py-1 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
+          >
+            <i class="fas fa-external-link-alt fa-sm mr-2"></i>
+            <span class="text-sm font-medium">開啟網頁</span>
+          </a>
+        </div>
+        {% else %}
+        <h1 class="text-xl font-semibold text-gray-800">對話視窗</h1>
+        {% endif %}
+      </header>
+
+      <!-- Chat Messages -->
+      <div id="chat-messages" class="flex-1 p-6 overflow-y-auto bg-gray-50">
+        {% for message in chat_history %}
+        <div
+          class="flex mb-4 {% if message.type == 'human' %}justify-end{% else %}justify-start{% endif %}"
+        >
+          <div
+            class="max-w-prose p-4 rounded-xl {% if message.type == 'human' %}bg-blue-500 text-white{% else %}bg-white text-gray-800 border border-gray-200{% endif %}"
+          >
+            <p class="whitespace-pre-wrap">{{ message.content }}</p>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- Message Input -->
+      <div class="p-6 bg-white border-t border-gray-200 shrink-0">
+        <form id="chat-form" class="flex items-center">
+          <input
+            type="text"
+            id="message-input"
+            class="w-full bg-gray-100 text-gray-800 placeholder-gray-500 p-4 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
+            placeholder="在這裡輸入您的訊息..."
+            autocomplete="off"
+          />
+          <button
+            type="submit"
+            class="bg-blue-500 text-white px-6 py-4 rounded-r-lg hover:bg-blue-600 transition-colors duration-200 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          >
+            <i class="fas fa-paper-plane"></i>
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Custom Confirmation Modal -->
+    <div
+      id="delete-modal"
+      class="fixed inset-0 z-50 hidden items-center justify-center bg-black bg-opacity-50 transition-opacity duration-300 ease-out"
+    >
+      <div
+        class="w-full max-w-md transform rounded-lg bg-white p-6 shadow-xl transition-all duration-300 ease-out"
+      >
+        <h3 class="text-lg font-bold text-gray-900">刪除對話</h3>
+        <p class="mt-2 text-sm text-gray-600">
+          您確定要永久刪除此對話嗎？這個操作無法復原。
+        </p>
+        <div class="mt-6 flex justify-end space-x-4">
+          <button
+            id="cancel-delete-btn"
+            class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+          >
+            取消
+          </button>
+          <button
+            id="confirm-delete-btn"
+            class="rounded-md border border-transparent bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+          >
+            確認刪除
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        const chatMessages = document.getElementById("chat-messages");
+        const chatForm = document.getElementById("chat-form");
+        const messageInput = document.getElementById("message-input");
+        const submitButton = chatForm.querySelector('button[type="submit"]');
+        const deleteModal = document.getElementById("delete-modal");
+        const confirmDeleteBtn = document.getElementById("confirm-delete-btn");
+        const cancelDeleteBtn = document.getElementById("cancel-delete-btn");
+
+        let sessionToDelete = null;
+        const currentSession = "{{ current_session }}";
+
+        const scrollToBottom = () => {
+          chatMessages.scrollTop = chatMessages.scrollHeight;
+        };
+        scrollToBottom();
+
+        const addMessageToUI = (content, type) => {
+          const messageDiv = document.createElement("div");
+          messageDiv.className = `flex mb-4 ${
+            type === "human" ? "justify-end" : "justify-start"
+          }`;
+          const contentDiv = document.createElement("div");
+          contentDiv.className = `max-w-prose p-4 rounded-xl ${
+            type === "human"
+              ? "bg-blue-500 text-white"
+              : "bg-white text-gray-800 border border-gray-200"
+          }`;
+          const p = document.createElement("p");
+          p.className = "whitespace-pre-wrap";
+          p.textContent = content;
+          contentDiv.appendChild(p);
+          messageDiv.appendChild(contentDiv);
+          chatMessages.appendChild(messageDiv);
+          scrollToBottom();
+          return messageDiv;
+        };
+
+        const addLoadingMessage = (text = "AI 正在思考中...") => {
+          const messageDiv = document.createElement("div");
+          messageDiv.className = "flex mb-4 justify-start";
+          messageDiv.id = "loading-message";
+
+          const contentDiv = document.createElement("div");
+          contentDiv.className =
+            "max-w-prose p-4 rounded-xl bg-white text-gray-800 border border-gray-200";
+
+          const loadingDiv = document.createElement("div");
+          loadingDiv.className = "flex items-center space-x-2";
+
+          const dotsContainer = document.createElement("div");
+          dotsContainer.className = "flex space-x-1";
+
+          // 創建三個載入點
+          for (let i = 0; i < 3; i++) {
+            const dot = document.createElement("div");
+            dot.className = "w-2 h-2 bg-blue-400 rounded-full loading-dot";
+            dotsContainer.appendChild(dot);
+          }
+
+          const loadingText = document.createElement("span");
+          loadingText.textContent = text;
+          loadingText.className = "text-gray-500 text-sm";
+          loadingText.id = "loading-text";
+
+          loadingDiv.appendChild(dotsContainer);
+          loadingDiv.appendChild(loadingText);
+          contentDiv.appendChild(loadingDiv);
+          messageDiv.appendChild(contentDiv);
+          chatMessages.appendChild(messageDiv);
+          scrollToBottom();
+
+          return messageDiv;
+        };
+
+        const updateLoadingMessage = (text) => {
+          const loadingText = document.getElementById("loading-text");
+          if (loadingText) {
+            loadingText.textContent = text;
+            scrollToBottom();
+          }
+        };
+
+        const removeLoadingMessage = () => {
+          const loadingMessage = document.getElementById("loading-message");
+          if (loadingMessage) {
+            loadingMessage.remove();
+          }
+        };
+
+        const setLoadingState = (isLoading) => {
+          messageInput.disabled = isLoading;
+          submitButton.disabled = isLoading;
+          if (isLoading) {
+            submitButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+          } else {
+            submitButton.innerHTML = '<i class="fas fa-paper-plane"></i>';
+          }
+        };
+
+        const showModal = (sessionId) => {
+          sessionToDelete = sessionId;
+          deleteModal.classList.remove("hidden");
+          deleteModal.classList.add("flex");
+        };
+
+        const hideModal = () => {
+          deleteModal.classList.add("hidden");
+          deleteModal.classList.remove("flex");
+          sessionToDelete = null;
+        };
+
+        chatForm.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const message = messageInput.value.trim();
+          if (!message) return;
+
+          // 顯示使用者訊息
+          addMessageToUI(message, "human");
+          messageInput.value = "";
+
+          // 顯示載入中的 AI 訊息
+          addLoadingMessage();
+          setLoadingState(true);
+
+          try {
+            // 使用 Server-Sent Events 來接收即時狀態更新
+            const eventSource = new EventSource(
+              `/api/chat_stream?message=${encodeURIComponent(
+                message
+              )}&session_id=${currentSession}`
+            );
+
+            eventSource.onmessage = function (event) {
+              const data = JSON.parse(event.data);
+
+              if (data.type === "status") {
+                // 更新載入訊息顯示工具使用狀態
+                updateLoadingMessage(data.message);
+              } else if (data.type === "response") {
+                // 收到最終回應
+                removeLoadingMessage();
+                addMessageToUI(data.message, "ai");
+                eventSource.close();
+                setLoadingState(false);
+                messageInput.focus();
+                if ("{{ chat_history|length }}" === "0") {
+                  window.location.reload();
+                }
+              } else if (data.type === "error") {
+                // 處理錯誤
+                removeLoadingMessage();
+                addMessageToUI(`發生錯誤: ${data.message}`, "ai");
+                eventSource.close();
+                setLoadingState(false);
+                messageInput.focus();
+              }
+            };
+
+            eventSource.onerror = function (event) {
+              console.error("EventSource failed:", event);
+              removeLoadingMessage();
+              addMessageToUI("連線錯誤，請重試", "ai");
+              eventSource.close();
+              setLoadingState(false);
+              messageInput.focus();
+            };
+
+            // 如果 SSE 不可用，回退到原始方法
+            eventSource.addEventListener("open", function (event) {
+              console.log("SSE connection opened");
+            });
+          } catch (error) {
+            console.error("Error:", error);
+            // 回退到原始的 fetch 方法
+            try {
+              const response = await fetch("/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  message: message,
+                  session_id: currentSession,
+                }),
+              });
+              if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || "伺服器錯誤");
+              }
+              const data = await response.json();
+
+              // 移除載入訊息，顯示 AI 回覆
+              removeLoadingMessage();
+              addMessageToUI(data.response, "ai");
+            } catch (fallbackError) {
+              console.error("Fallback error:", fallbackError);
+              removeLoadingMessage();
+              addMessageToUI(`發生錯誤: ${fallbackError.message}`, "ai");
+            } finally {
+              setLoadingState(false);
+              messageInput.focus();
+              if ("{{ chat_history|length }}" === "0") {
+                window.location.reload();
+              }
+            }
+          }
+        });
+
+        cancelDeleteBtn.addEventListener("click", hideModal);
+
+        confirmDeleteBtn.addEventListener("click", async () => {
+          if (!sessionToDelete) return;
+          const listItem = document.querySelector(
+            `li[data-session-id="${sessionToDelete}"]`
+          );
+          try {
+            const response = await fetch(`/api/chat/${sessionToDelete}`, {
+              method: "DELETE",
+            });
+            const data = await response.json();
+            if (data.success) {
+              if (sessionToDelete === currentSession) {
+                // 如果刪除的是當前對話
+                if (data.is_last_session) {
+                  // 如果這是最後一個對話，返回首頁
+                  window.location.href = "/api/exit_project";
+                } else {
+                  // 如果還有其他對話，創建新對話但保留專案資訊
+                  window.location.href = "/api/new_session_with_project";
+                }
+              } else {
+                // 如果刪除的不是當前對話，只移除列表項目
+                listItem.remove();
+              }
+            } else {
+              alert(`刪除失敗: ${data.error || "未知錯誤"}`);
+            }
+          } catch (error) {
+            console.error("Error deleting session:", error);
+            alert("刪除過程中發生錯誤。");
+          } finally {
+            hideModal();
+          }
+        });
+
+        document.querySelectorAll(".delete-session-btn").forEach((button) => {
+          button.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const listItem = button.closest("li[data-session-id]");
+            const sessionId = listItem.dataset.sessionId;
+            if (sessionId) {
+              showModal(sessionId);
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

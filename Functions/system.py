@@ -10,9 +10,19 @@ def get_containers():
     containers = client.containers.list(all=True)
     container_list = []
     for container in containers:
-        container_list.append(
-            {"name": container.name, "status": container.status, "id": container.id}
-        )
+        if container.name.startswith("ai-web-ide_"):
+            ports = container.attrs['HostConfig']['PortBindings']
+            # 假設只有一個 port binding
+            host_port = None
+            if ports and '80/tcp' in ports:
+                host_port = ports['80/tcp'][0]['HostPort']
+
+            container_list.append({
+                "name": container.name,
+                "status": container.status,
+                "id": container.id,
+                "port": host_port
+            })
     return container_list
 
 
@@ -42,12 +52,20 @@ def create_container(container_name: str, port: int = 8080):
     for filename in ["index.html", "index.css", "index.js"]:
         shutil.copy(os.path.join(template_dir, filename), os.path.join(project_dir, filename))
 
-    # 建立 Dockerfile
+    # 建立 Dockerfile - 包含 patch 工具安裝
     dockerfile_path = os.path.join(project_dir, "Dockerfile")
     with open(dockerfile_path, "w") as f:
         f.write("""
 FROM nginx:alpine
+
+# 安裝 patch 工具和其他必要工具
+RUN apk add --no-cache patch
+
+# 複製網站檔案
 COPY . /usr/share/nginx/html
+
+# 確保 nginx 可以正常運行
+EXPOSE 80
         """.strip())
 
     # 建立 image
@@ -56,7 +74,7 @@ COPY . /usr/share/nginx/html
     client.images.build(path=project_dir, tag=image_tag)
 
     # 停用並移除舊容器（若已存在）
-    container_id = f"{container_name.lower()}_container"
+    container_id = f"ai-web-ide_{container_name.lower()}_container"
     try:
         existing_container = client.containers.get(container_id)
         print(f"⚠️ Stopping and removing existing container {container_id}...")

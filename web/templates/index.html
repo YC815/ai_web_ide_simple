@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Web IDE 容器列表</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-gray-100 text-gray-800 font-sans">
+    <nav class="flex justify-between items-center p-4 bg-white shadow-md">
+      <a href="/" class="text-blue-600 font-bold">首頁</a>
+      <button
+        id="create-project-btn"
+        class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md transition duration-300 disabled:opacity-50"
+      >
+        建立專案
+      </button>
+    </nav>
+    <div
+      class="container mx-auto p-8 max-w-4xl bg-white rounded-lg shadow-lg mt-10"
+    >
+      <h1
+        class="text-3xl font-bold text-blue-600 border-b-2 border-blue-200 pb-4 mb-6"
+      >
+        <span>專案列表</span>
+      </h1>
+      <ul>
+        {% for container in containers %}
+        <li
+          class="mb-3 flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 p-4"
+        >
+          <div class="flex items-center">
+            <a
+              href="http://localhost:{{ container.port }}"
+              target="_blank"
+              class="text-lg font-medium text-blue-600 hover:underline"
+            >
+              {{ container.name }}
+            </a>
+            {# 根據容器狀態給予不同的 CSS class #} {% set status_classes = {
+            'running': 'bg-green-100 text-green-800', 'exited': 'bg-red-100
+            text-red-800', 'created': 'bg-red-100 text-red-800', 'paused':
+            'bg-yellow-100 text-yellow-800' } %}
+            <span
+              class="ml-4 px-3 py-1 rounded-full text-sm font-semibold {{ status_classes.get(container.status, 'bg-gray-100 text-gray-800') }}"
+              >{{ container.status }}</span
+            >
+          </div>
+          <a
+            href="{{ url_for('select_project', project_name=container.name) }}"
+            class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
+          >
+            前往專案
+          </a>
+        </li>
+        {% else %} {# 如果沒有任何容器，顯示此訊息 #}
+        <li class="text-center py-10 text-gray-500">
+          目前沒有任何符合條件的容器。
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <!-- Modal -->
+    <div
+      id="create-project-modal"
+      class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center hidden z-50"
+    >
+      <div
+        class="relative mx-auto p-5 border w-full max-w-sm shadow-lg rounded-md bg-white"
+      >
+        <div class="mt-3 text-center">
+          <h3 class="text-lg leading-6 font-medium text-gray-900">
+            建立新專案
+          </h3>
+          <div class="mt-2 px-7 py-3">
+            <input
+              type="text"
+              id="project-name-input"
+              class="w-full px-3 py-2 text-gray-700 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="請輸入專案名稱"
+            />
+            <p
+              id="modal-error-msg"
+              class="text-gray-500 text-sm mt-1 h-4 text-left"
+            >
+              只能用英數字, _, -
+            </p>
+          </div>
+          <div class="items-center px-4 py-3 space-y-2">
+            <button
+              id="confirm-create-btn"
+              class="px-4 py-2 bg-blue-500 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:opacity-50"
+            >
+              確認建立
+            </button>
+            <button
+              id="cancel-create-btn"
+              class="px-4 py-2 bg-gray-200 text-gray-800 text-base font-medium rounded-md w-full shadow-sm hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const createProjectBtn = document.getElementById("create-project-btn");
+      const modal = document.getElementById("create-project-modal");
+      const cancelBtn = document.getElementById("cancel-create-btn");
+      const confirmBtn = document.getElementById("confirm-create-btn");
+      const projectNameInput = document.getElementById("project-name-input");
+      const errorMsg = document.getElementById("modal-error-msg");
+
+      function showModal() {
+        modal.classList.remove("hidden");
+        projectNameInput.value = "";
+        errorMsg.textContent = "只能用英數字, _, -";
+        errorMsg.classList.remove("text-red-500");
+        errorMsg.classList.add("text-gray-500");
+        projectNameInput.focus();
+      }
+
+      function hideModal() {
+        modal.classList.add("hidden");
+      }
+
+      createProjectBtn.addEventListener("click", showModal);
+      cancelBtn.addEventListener("click", hideModal);
+
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal) {
+          hideModal();
+        }
+      });
+
+      confirmBtn.addEventListener("click", async () => {
+        const projectName = projectNameInput.value.trim();
+        const validationRegex = /^[a-zA-Z0-9_-]+$/;
+
+        const showError = (message) => {
+          errorMsg.textContent = message;
+          errorMsg.classList.remove("text-gray-500");
+          errorMsg.classList.add("text-red-500");
+        };
+
+        if (!projectName) {
+          showError("專案名稱不可為空。");
+          return;
+        }
+        if (!validationRegex.test(projectName)) {
+          showError("格式不符 (只能用英數字, _, -)");
+          return;
+        }
+
+        errorMsg.textContent = "";
+
+        const originalConfirmBtnText = confirmBtn.textContent;
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "建立中...";
+        createProjectBtn.disabled = true;
+
+        try {
+          const response = await fetch("/create", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ project_name: projectName }),
+          });
+          const result = await response.json();
+          if (response.ok) {
+            hideModal();
+            alert(result.message || "專案建立成功！");
+            window.location.reload();
+          } else {
+            alert(`建立專案失敗: ${result.error || "未知錯誤"}`);
+          }
+        } catch (error) {
+          console.error("建立專案時發生錯誤:", error);
+          alert("建立專案時發生網路或伺服器錯誤，請查看 Console。");
+        } finally {
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = originalConfirmBtnText;
+          createProjectBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

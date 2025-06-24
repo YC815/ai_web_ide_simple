@@ -5,8 +5,16 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 import os
+import sys
 from dotenv import load_dotenv
-from . import ai_tool
+
+# 處理相對導入問題
+try:
+    from . import ai_tool
+except ImportError:
+    # 如果相對導入失敗，嘗試絕對導入
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from Functions import ai_tool
 
 load_dotenv()
 
@@ -83,7 +91,7 @@ def list_todo(latest_input):
             "Please follow these rules:\n\n"
             "* **Do NOT include any tasks related to locating files, opening files, saving, testing, or viewing results.**\n"
             "* Focus strictly on describing the **specific code edits** that need to be made.\n"
-            "* Each TODO should follow the format: `{action} + {target} + {location or purpose}`\n"
+            "* Each TODO should follow the format: `{{action}} + {{target}} + {{location or purpose}}`\n"
             "* Arrange all TODO items in a logical and dependency-aware execution order.\n"
             "* If no change is required for this file type, leave the result empty.\n"
             "* If there are any function names, CSS class names, or shared concepts used across TODOs, include them in a `note:` section.\n"
@@ -94,7 +102,7 @@ def list_todo(latest_input):
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_message),
-            ("human", HumanMessage(content=latest_input))
+            ("human", latest_input)
         ])
 
         response = llm.invoke(prompt.format_messages())
@@ -265,7 +273,7 @@ Analysis:
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_message),
-            ("human", HumanMessage(content=todo))
+            ("human", todo)
         ])
 
         response = llm.invoke(prompt.format_messages())

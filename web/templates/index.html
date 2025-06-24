@@ -46,12 +46,38 @@
               >{{ container.status }}</span
             >
           </div>
-          <a
-            href="{{ url_for('select_project', project_name=container.name) }}"
-            class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
-          >
-            前往專案
-          </a>
+          <div class="flex items-center space-x-2">
+            {% if container.status == 'running' %}
+            <button
+              class="control-container-btn bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
+              data-action="stop"
+              data-container-name="{{ container.name }}"
+            >
+              停止容器
+            </button>
+            {% else %}
+            <button
+              class="control-container-btn bg-teal-500 hover:bg-teal-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
+              data-action="start"
+              data-container-name="{{ container.name }}"
+            >
+              運行容器
+            </button>
+            {% endif %}
+            <a
+              href="{{ url_for('select_project', project_name=container.name) }}"
+              class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
+            >
+              前往專案
+            </a>
+            <button
+              class="delete-container-btn bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
+              data-container-name="{{ container.name }}"
+              title="刪除容器"
+            >
+              🗑️
+            </button>
+          </div>
         </li>
         {% else %} {# 如果沒有任何容器，顯示此訊息 #}
         <li class="text-center py-10 text-gray-500">
@@ -105,6 +131,53 @@
       </div>
     </div>
 
+    <!-- Delete Confirmation Modal -->
+    <div
+      id="delete-container-modal"
+      class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center hidden z-50"
+    >
+      <div
+        class="relative mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white"
+      >
+        <div class="mt-3 text-center">
+          <div
+            class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100"
+          >
+            <span class="text-red-600 text-2xl">⚠️</span>
+          </div>
+          <h3 class="text-lg leading-6 font-medium text-gray-900 mt-4">
+            確認刪除容器
+          </h3>
+          <div class="mt-2 px-7 py-3">
+            <p class="text-sm text-gray-500">
+              您確定要刪除容器 "<span
+                id="delete-container-name"
+                class="font-semibold"
+              ></span
+              >" 嗎？
+            </p>
+            <p class="text-xs text-red-500 mt-2">
+              此操作無法復原，容器內的所有資料將會遺失。
+            </p>
+          </div>
+          <div class="items-center px-4 py-3 space-y-2">
+            <button
+              id="confirm-delete-btn"
+              class="px-4 py-2 bg-red-500 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-300 disabled:opacity-50"
+            >
+              確認刪除
+            </button>
+            <button
+              id="cancel-delete-btn"
+              class="px-4 py-2 bg-gray-200 text-gray-800 text-base font-medium rounded-md w-full shadow-sm hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script>
       const createProjectBtn = document.getElementById("create-project-btn");
       const modal = document.getElementById("create-project-modal");
@@ -112,6 +185,16 @@
       const confirmBtn = document.getElementById("confirm-create-btn");
       const projectNameInput = document.getElementById("project-name-input");
       const errorMsg = document.getElementById("modal-error-msg");
+      const containerList = document.querySelector("ul");
+
+      // Delete modal elements
+      const deleteModal = document.getElementById("delete-container-modal");
+      const cancelDeleteBtn = document.getElementById("cancel-delete-btn");
+      const confirmDeleteBtn = document.getElementById("confirm-delete-btn");
+      const deleteContainerNameSpan = document.getElementById(
+        "delete-container-name"
+      );
+      let currentDeleteContainerName = "";
 
       function showModal() {
         modal.classList.remove("hidden");
@@ -134,6 +217,115 @@
           hideModal();
         }
       });
+
+      async function handleContainerControl(event) {
+        if (!event.target.classList.contains("control-container-btn")) {
+          return;
+        }
+
+        const button = event.target;
+        const action = button.dataset.action;
+        const containerName = button.dataset.containerName;
+        const apiUrl = `/api/container/${action}`;
+
+        const originalButtonText = button.textContent;
+        button.disabled = true;
+        button.textContent = action === "start" ? "啟動中..." : "停止中...";
+
+        try {
+          const response = await fetch(apiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ container_name: containerName }),
+          });
+
+          const result = await response.json();
+          if (response.ok && result.success) {
+            alert(result.message || "操作成功！");
+            window.location.reload();
+          } else {
+            alert(`操作失敗: ${result.error || "未知錯誤"}`);
+            button.disabled = false;
+            button.textContent = originalButtonText;
+          }
+        } catch (error) {
+          console.error("操作容器時發生錯誤:", error);
+          alert("操作時發生網路或伺服器錯誤，請查看 Console。");
+          button.disabled = false;
+          button.textContent = originalButtonText;
+        }
+      }
+
+      containerList.addEventListener("click", handleContainerControl);
+
+      // Delete modal logic
+      function showDeleteModal(containerName) {
+        currentDeleteContainerName = containerName;
+        deleteContainerNameSpan.textContent = containerName;
+        deleteModal.classList.remove("hidden");
+      }
+
+      function hideDeleteModal() {
+        deleteModal.classList.add("hidden");
+        currentDeleteContainerName = "";
+      }
+
+      async function handleDeleteContainer(event) {
+        if (!event.target.classList.contains("delete-container-btn")) {
+          return;
+        }
+
+        const button = event.target;
+        const containerName = button.dataset.containerName;
+        showDeleteModal(containerName);
+      }
+
+      cancelDeleteBtn.addEventListener("click", hideDeleteModal);
+
+      deleteModal.addEventListener("click", (event) => {
+        if (event.target === deleteModal) {
+          hideDeleteModal();
+        }
+      });
+
+      confirmDeleteBtn.addEventListener("click", async () => {
+        if (!currentDeleteContainerName) {
+          return;
+        }
+
+        const originalButtonText = confirmDeleteBtn.textContent;
+        confirmDeleteBtn.disabled = true;
+        confirmDeleteBtn.textContent = "刪除中...";
+
+        try {
+          const response = await fetch("/api/container/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              container_name: currentDeleteContainerName,
+            }),
+          });
+
+          const result = await response.json();
+          if (response.ok && result.success) {
+            hideDeleteModal();
+            alert(result.message || "容器刪除成功！");
+            window.location.reload();
+          } else {
+            alert(`刪除失敗: ${result.error || "未知錯誤"}`);
+            confirmDeleteBtn.disabled = false;
+            confirmDeleteBtn.textContent = originalButtonText;
+          }
+        } catch (error) {
+          console.error("刪除容器時發生錯誤:", error);
+          alert("刪除時發生網路或伺服器錯誤，請查看 Console。");
+          confirmDeleteBtn.disabled = false;
+          confirmDeleteBtn.textContent = originalButtonText;
+        }
+      });
+
+      // Add delete event listener to container list
+      containerList.addEventListener("click", handleDeleteContainer);
 
       confirmBtn.addEventListener("click", async () => {
         const projectName = projectNameInput.value.trim();

@@ -26,6 +26,67 @@ def get_containers():
     return container_list
 
 
+def start_container(container_name: str):
+    """根據容器名稱啟動指定的容器"""
+    try:
+        container = client.containers.get(container_name)
+        container.start()
+        print(f"✅ Container {container_name} started.")
+    except docker.errors.NotFound:
+        print(f"❌ Container {container_name} not found.")
+        raise
+    except Exception as e:
+        print(f"❌ Error starting container {container_name}: {e}")
+        raise
+
+
+def stop_container(container_name: str):
+    """根據容器名稱停止指定的容器"""
+    try:
+        container = client.containers.get(container_name)
+        container.stop()
+        print(f"✅ Container {container_name} stopped.")
+    except docker.errors.NotFound:
+        print(f"❌ Container {container_name} not found.")
+        raise
+    except Exception as e:
+        print(f"❌ Error stopping container {container_name}: {e}")
+        raise
+
+
+def delete_container(container_name: str):
+    """根據容器名稱刪除指定的容器，採用多段重試式刪除"""
+    try:
+        container = client.containers.get(container_name)
+
+        # 第一階段：嘗試一般刪除
+        try:
+            # 先停止容器（如果正在運行）
+            if container.status == 'running':
+                container.stop()
+            container.remove()
+            print(f"✅ Container {container_name} deleted successfully.")
+            return True
+        except Exception as e:
+            print(f"⚠️ Normal deletion failed for {container_name}: {e}")
+
+            # 第二階段：強制刪除（不顯示錯誤視窗）
+            try:
+                container.remove(force=True)
+                print(f"✅ Container {container_name} force deleted successfully.")
+                return True
+            except Exception as force_e:
+                print(f"❌ Force deletion also failed for {container_name}: {force_e}")
+                raise force_e
+
+    except docker.errors.NotFound:
+        print(f"❌ Container {container_name} not found.")
+        raise
+    except Exception as e:
+        print(f"❌ Error deleting container {container_name}: {e}")
+        raise
+
+
 def find_available_port(start_port=8080):
     port = start_port
     while True:

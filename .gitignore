@@ -1,3 +1,5 @@
 chat_history.db
 .env
 .env
+logs
+Functions/__pycache__/

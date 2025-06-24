@@ -14,6 +14,11 @@ from Functions.ai_chat import (
     delete_session,
     create_project_session_id,
 )
+from Functions.log_config import setup_logging, get_logger
+
+# 設定日誌
+setup_logging()
+logger = get_logger(__name__)
 
 
 app = Flask(
@@ -118,7 +123,7 @@ def delete_chat_session(session_id: str):
             "is_last_session": len(remaining_sessions) == 0
         })
     except Exception as e:
-        print(f"刪除 session 時發生錯誤: {e}")
+        logger.error(f"刪除 session 時發生錯誤: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -153,17 +158,14 @@ def api_chat():
     if not project_name:
         return jsonify({"error": "未選擇專案，請返回首頁選擇"}), 400
 
-    print(f"[APP.PY] 收到聊天請求 - 專案: {project_name}, 使用者輸入: {user_input}")
+    logger.info(f"收到聊天請求 - 專案: {project_name}, 使用者輸入: {user_input}")
 
     try:
         ai_response = chat_with_ai(user_input, session_id, project_name)
-        print(f"[APP.PY] AI 回應內容:")
-        print("=" * 50)
-        print(ai_response)
-        print("=" * 50)
+        logger.info(f"AI 回應內容 (長度: {len(ai_response)}): {ai_response[:200]}...")
         return jsonify({"response": ai_response})
     except Exception as e:
-        print(f"與 AI 對話時發生錯誤: {e}")
+        logger.error(f"與 AI 對話時發生錯誤: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -180,7 +182,7 @@ def api_chat_stream():
     if not project_name:
         return jsonify({"error": "未選擇專案，請返回首頁選擇"}), 400
 
-    print(f"[APP.PY STREAM] 收到 streaming 聊天請求 - 專案: {project_name}, 使用者輸入: {user_input}")
+    logger.info(f"收到 streaming 聊天請求 - 專案: {project_name}, 使用者輸入: {user_input}")
 
     def generate():
         try:
@@ -205,19 +207,16 @@ def api_chat_stream():
 
             def run_chat():
                 try:
-                    print(f"[APP.PY STREAM] 開始執行 AI 聊天 - 專案: {project_name}")
+                    logger.info(f"開始執行 AI 聊天 - 專案: {project_name}")
                     result_container["response"] = chat_with_ai_stream(
                         user_input,
                         session_id,
                         project_name,
                         status_callback
                     )
-                    print(f"[APP.PY STREAM] AI 執行完成，回應內容:")
-                    print("=" * 60)
-                    print(result_container["response"])
-                    print("=" * 60)
+                    logger.info(f"AI 執行完成，回應長度: {len(result_container['response'])}")
                 except Exception as e:
-                    print(f"[APP.PY STREAM] 執行錯誤: {e}")
+                    logger.error(f"執行 AI 聊天時發生錯誤: {e}", exc_info=True)
                     result_container["error"] = str(e)
 
             chat_thread = threading.Thread(target=run_chat)
@@ -251,7 +250,7 @@ def api_chat_stream():
                 yield f"data: {response_data}\n\n"
 
         except Exception as e:
-            print(f"Stream 聊天時發生錯誤: {e}")
+            logger.error(f"Stream 聊天時發生錯誤: {e}", exc_info=True)
             error_data = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)
             yield f"data: {error_data}\n\n"
 
@@ -281,13 +280,58 @@ def create_project():
         if not re.match(r'^[a-zA-Z0-9_-]+$', project_name):
             return jsonify({"error": "專案名稱格式不正確，只能包含英文字母、數字、底線與連字號。"}), 400
 
-        print(f"收到建立專案請求: {project_name}")
+        logger.info(f"收到建立專案請求: {project_name}")
         container = create_container(container_name=project_name)
         return jsonify({"success": True, "container_id": container.id, "message": f"容器 '{container.name}' 建立成功！"}), 201
 
     except Exception as e:
-        print(f"建立容器時發生錯誤: {e}")
+        logger.error(f"建立容器時發生錯誤: {e}", exc_info=True)
         return jsonify({"error": f"伺服器內部錯誤: {e}"}), 500
+
+
+@app.route("/api/container/start", methods=["POST"])
+def start_container_route():
+    data = request.get_json()
+    container_name = data.get("container_name")
+    if not container_name:
+        return jsonify({"success": False, "error": "Missing container name"}), 400
+    try:
+        from Functions.system import start_container
+        start_container(container_name)
+        return jsonify({"success": True, "message": f"Container {container_name} started."})
+    except Exception as e:
+        logger.error(f"啟動容器 {container_name} 時發生錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/container/stop", methods=["POST"])
+def stop_container_route():
+    data = request.get_json()
+    container_name = data.get("container_name")
+    if not container_name:
+        return jsonify({"success": False, "error": "Missing container name"}), 400
+    try:
+        from Functions.system import stop_container
+        stop_container(container_name)
+        return jsonify({"success": True, "message": f"Container {container_name} stopped."})
+    except Exception as e:
+        logger.error(f"停止容器 {container_name} 時發生錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/container/delete", methods=["POST"])
+def delete_container_route():
+    data = request.get_json()
+    container_name = data.get("container_name")
+    if not container_name:
+        return jsonify({"success": False, "error": "Missing container name"}), 400
+    try:
+        from Functions.system import delete_container
+        delete_container(container_name)
+        return jsonify({"success": True, "message": f"Container {container_name} deleted successfully."})
+    except Exception as e:
+        logger.error(f"刪除容器 {container_name} 時發生錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 if __name__ == "__main__":

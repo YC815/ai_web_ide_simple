@@ -6,8 +6,11 @@ from io import StringIO
 from typing import Optional
 import tarfile
 import io
-from .ai_chat import get_latest_user_message
+import sqlite3
 from .sub_agent import run_sub_agent_edit_task  # 你之後會實作的副 agent 邏輯
+from .log_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_html_code(container_name: str):
@@ -87,6 +90,37 @@ def create_tar_from_file(filepath: str, arcname: str) -> bytes:
     return tar_stream.read()
 
 
+def get_latest_user_message(session_id: str, project_name: Optional[str] = None) -> Optional[str]:
+    """
+    從資料庫中取得最新的使用者訊息
+    """
+    # 建立專案特定的 session ID
+    if project_name:
+        full_session_id = f"{project_name}::{session_id}"
+    else:
+        full_session_id = session_id
+
+    try:
+        conn = sqlite3.connect("chat_history.db")
+        c = conn.cursor()
+        c.execute("""
+            SELECT content FROM messages
+            WHERE session_id = ? AND role = 'user'
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (full_session_id,))
+        result = c.fetchone()
+        conn.close()
+
+        if result:
+            return result[0]
+        logger.warning(f"在 session '{full_session_id}' 中找不到使用者訊息")
+        return None
+    except Exception as e:
+        logger.error(f"無法取得最新使用者訊息: {str(e)}", exc_info=True)
+        return None
+
+
 def edit_request(container_name: str, session_id: str, project_name: Optional[str] = None) -> str:
     """
     自動從最近的使用者輸入生成修改任務，並交由副 agent 處理
@@ -95,4 +129,5 @@ def edit_request(container_name: str, session_id: str, project_name: Optional[st
     if not latest_input:
         return "[❌] 無法取得最近的使用者輸入。請確認聊天歷史存在。"
 
+    logger.info(f"使用最新使用者輸入執行編輯任務: '{latest_input[:100]}...'")
     return run_sub_agent_edit_task(container_name, latest_input)

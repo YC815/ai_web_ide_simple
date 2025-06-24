@@ -12,8 +12,11 @@ from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 import os
+from .log_config import get_logger
 
 load_dotenv()
+
+logger = get_logger(__name__)
 
 # ---------- Tool definitions ---------- #
 
@@ -88,10 +91,10 @@ IMPORTANT: For CSS styling preferences, the sub-agent will prefer using Tailwind
         # 智能處理容器名稱 - 如果 project_name 已經包含完整的容器名稱，直接使用
         if project_name.startswith('ai-web-ide_') and project_name.endswith('_container'):
             container_name = project_name
-            print(f"[AGENT_BUILD] 使用完整容器名稱: {container_name}")
+            logger.info(f"使用完整容器名稱: {container_name}")
         else:
             container_name = f'ai-web-ide_{project_name}_container'
-            print(f"[AGENT_BUILD] 生成容器名稱: {container_name} (來自專案: {project_name})")
+            logger.info(f"生成容器名稱: {container_name} (來自專案: {project_name})")
 
         system_message += f"""
 You are currently working on the project '{project_name}'.
@@ -184,7 +187,7 @@ def init_chat_session(session_id: str, project_name: Optional[str] = None) -> No
         c.execute("SELECT project_name FROM messages LIMIT 1")
     except sqlite3.OperationalError:
         # project_name 欄位不存在，需要添加
-        print("[INFO] 升級資料庫結構：添加 project_name 欄位")
+        logger.info("升級資料庫結構：添加 project_name 欄位")
         c.execute("ALTER TABLE messages ADD COLUMN project_name TEXT")
         conn.commit()
 
@@ -345,20 +348,32 @@ def chat_with_ai(
     user_input: str, session_id: str, project_name: Optional[str] = None
 ) -> str:
     """主聊天函數，支援專案分離"""
-    print(f"[AI_CHAT] 開始處理聊天請求 - 專案: {project_name}")
+    logger.info(f"開始處理聊天請求 - 專案: {project_name}")
 
     # 初始化 session（包含專案資訊）
     init_chat_session(session_id, project_name)
 
+    # 儲存使用者訊息
+    save_message_to_db(session_id, "user", user_input, project_name)
+    logger.info("已儲存使用者訊息到資料庫")
+
     # 取得歷史訊息（專案特定）
     history = load_chat_history(session_id, project_name)
-    print(f"[AI_CHAT] 載入聊天歷史，共 {len(history)} 條訊息")
+    logger.info(f"載入聊天歷史，共 {len(history)} 條訊息")
 
     # 建立 agent
     tools = get_registered_tools()
-    print(f"[AI_CHAT] 建立 agent，可用工具: {[tool.name for tool in tools]}")
+    logger.info(f"建立 agent，可用工具: {[tool.name for tool in tools]}")
 
     agent_executor = build_agent_with_tools(tools, project_name)
+
+    # 智能處理容器名稱
+    container_name = None
+    if project_name:
+        if project_name.startswith('ai-web-ide_') and project_name.endswith('_container'):
+            container_name = project_name
+        else:
+            container_name = f'ai-web-ide_{project_name}_container'
 
     # 包裝工具以捕獲調用過程並自動注入參數
     original_tools = agent_executor.tools
@@ -367,23 +382,29 @@ def chat_with_ai(
     for tool in original_tools:
         def create_wrapped_tool(original_tool):
             def wrapped_func(*args, **kwargs):
-                print(f"[TOOL_CALL] 開始調用工具: {original_tool.name}")
+                logger.info(f"開始調用工具: {original_tool.name}")
 
-                # 特殊處理 edit_request 工具，自動注入參數
+                # 檢查工具是否需要 'container_name'
+                import inspect
+                tool_params = inspect.signature(original_tool.func).parameters
+
+                if 'container_name' in tool_params and container_name and 'container_name' not in kwargs:
+                    kwargs['container_name'] = container_name
+                    logger.info(f"自動注入參數: container_name='{container_name}'")
+
+                # 特殊處理 edit_request 工具，自動注入 session_id 和 project_name
                 if original_tool.name == 'edit_request':
-                    # 自動填入 session_id 和 project_name
                     kwargs['session_id'] = session_id
                     kwargs['project_name'] = project_name
-                    print(f"[TOOL_CALL] edit_request 自動注入參數: session_id={session_id}, project_name={project_name}")
+                    logger.info(f"edit_request 自動注入參數: session_id={session_id}, project_name={project_name}")
 
-                print(f"[TOOL_CALL] 參數: args={args}, kwargs={kwargs}")
+                logger.info(f"參數: args={args}, kwargs={kwargs}")
                 try:
                     result = original_tool.func(*args, **kwargs)
-                    print(f"[TOOL_CALL] 工具 {original_tool.name} 執行成功")
-                    print(f"[TOOL_RESULT] 結果: {result[:500]}...")  # 只顯示前500字元，避免過長
+                    logger.info(f"工具 {original_tool.name} 執行成功，結果長度: {len(str(result))}")
                     return result
                 except Exception as e:
-                    print(f"[TOOL_ERROR] 工具 {original_tool.name} 執行失敗: {str(e)}")
+                    logger.error(f"工具 {original_tool.name} 執行失敗: {str(e)}", exc_info=True)
                     raise e
 
             # 保持原有的工具屬性
@@ -403,7 +424,7 @@ def chat_with_ai(
     # 更新 agent_executor 的工具
     agent_executor.tools = wrapped_tools
 
-    print("[AI_CHAT] 開始執行 agent...")
+    logger.info("開始執行 agent...")
     # 執行 agent
     response = agent_executor.invoke(
         {
@@ -414,9 +435,8 @@ def chat_with_ai(
 
     # 儲存 AI 回覆（包含專案資訊）
     ai_response = response.get("output", "")
-    print(f"[AI_CHAT] Agent 執行完成，回應長度: {len(ai_response)} 字元")
+    logger.info(f"Agent 執行完成，回應長度: {len(ai_response)} 字元")
 
-    save_message_to_db(session_id, "user", user_input, project_name)
     save_message_to_db(session_id, "ai", ai_response, project_name)
 
     return ai_response
@@ -429,20 +449,32 @@ def chat_with_ai_stream(
     status_callback=None
 ) -> str:
     """主聊天函數，支援專案分離和狀態回調"""
-    print(f"[AI_CHAT_STREAM] 開始處理 streaming 聊天請求 - 專案: {project_name}")
+    logger.info(f"開始處理 streaming 聊天請求 - 專案: {project_name}")
 
     # 初始化 session（包含專案資訊）
     init_chat_session(session_id, project_name)
 
+    # 儲存使用者訊息
+    save_message_to_db(session_id, "user", user_input, project_name)
+    logger.info("已儲存使用者訊息到資料庫 (stream)")
+
     # 取得歷史訊息（專案特定）
     history = load_chat_history(session_id, project_name)
-    print(f"[AI_CHAT_STREAM] 載入聊天歷史，共 {len(history)} 條訊息")
+    logger.info(f"載入聊天歷史，共 {len(history)} 條訊息 (stream)")
 
     # 建立 agent
     tools = get_registered_tools()
-    print(f"[AI_CHAT_STREAM] 建立 agent，可用工具: {[tool.name for tool in tools]}")
+    logger.info(f"建立 agent，可用工具: {[tool.name for tool in tools]} (stream)")
 
     agent_executor = build_agent_with_tools(tools, project_name)
+
+    # 智能處理容器名稱
+    container_name = None
+    if project_name:
+        if project_name.startswith('ai-web-ide_') and project_name.endswith('_container'):
+            container_name = project_name
+        else:
+            container_name = f'ai-web-ide_{project_name}_container'
 
     # 建立工具名稱映射表
     tool_name_map = {
@@ -459,12 +491,23 @@ def chat_with_ai_stream(
     for tool in original_tools:
         def create_wrapped_tool(original_tool):
             def wrapped_func(*args, **kwargs):
+                # 檢查工具是否需要 'container_name'
+                import inspect
+                tool_params = inspect.signature(original_tool.func).parameters
+
+                if 'container_name' in tool_params and container_name and 'container_name' not in kwargs:
+                    kwargs['container_name'] = container_name
+                    if status_callback:
+                        status_callback(f"正在為專案 '{project_name}' 準備工具...")
+
                 # 特殊處理 edit_request 工具，自動注入參數
                 if original_tool.name == 'edit_request':
                     kwargs['session_id'] = session_id
                     kwargs['project_name'] = project_name
                     if status_callback:
                         status_callback("正在執行代碼編輯任務...")
+                elif original_tool.name in tool_name_map and status_callback:
+                    status_callback(tool_name_map[original_tool.name])
 
                 return original_tool.func(*args, **kwargs)
 
@@ -487,7 +530,7 @@ def chat_with_ai_stream(
     if status_callback:
         status_callback("AI 正在分析您的請求...")
 
-    print("[AI_CHAT_STREAM] 開始執行 agent...")
+    logger.info("開始執行 agent (stream)...")
     response = agent_executor.invoke(
         {
             "input": user_input,
@@ -497,23 +540,11 @@ def chat_with_ai_stream(
 
     # 儲存 AI 回覆（包含專案資訊）
     ai_response = response.get("output", "")
-    print(f"[AI_CHAT_STREAM] Agent 執行完成，回應長度: {len(ai_response)} 字元")
+    logger.info(f"Agent 執行完成，回應長度: {len(ai_response)} 字元 (stream)")
 
-    save_message_to_db(session_id, "user", user_input, project_name)
     save_message_to_db(session_id, "ai", ai_response, project_name)
 
     return ai_response
-
-
-def get_latest_user_message(session_id: str, project_name: Optional[str] = None) -> Optional[str]:
-    """
-    從 chat_history 中抓取最新一筆 HumanMessage（使用者輸入）
-    """
-    history = load_chat_history(session_id, project_name)
-    for msg in reversed(history):
-        if isinstance(msg, HumanMessage):
-            return msg.content
-    return None
 
 
 # ---------- 測試入口 ---------- #

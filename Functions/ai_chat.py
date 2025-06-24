@@ -6,7 +6,7 @@ from langchain.agents.agent import AgentExecutor
 from langchain.tools import tool
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from . import ai_tool
-from . import diff_tool
+from . import sub_agent
 import sqlite3
 from typing import List, Optional, Tuple
 
@@ -37,35 +37,28 @@ def get_js_code(container_name: str) -> str:
 
 
 @tool
-def diff_code(container_name: str, diff_code: str, language: str) -> str:
-    """將 unified diff patch 套用到 container 的指定文件中
+def edit_request(container_name: str, session_id: str, project_name: Optional[str] = None) -> str:
+    """執行代碼編輯任務
+
+    當使用者請求修改網頁內容、樣式或功能時，使用此工具。
+    工具會自動：
+    1. 分析使用者的最新請求
+    2. 生成對應的 HTML、CSS、JavaScript 修改計劃
+    3. 自動執行所有必要的代碼變更
+    4. 回報執行結果
 
     Parameters:
     - container_name: Docker 容器名稱
-    - diff_code: 要套用的 unified diff patch 內容（必須是 unified diff 格式）
-    - language: 文件類型，必須是 'html', 'css', 或 'js'
-
-    CRITICAL: diff_code 參數必須是 unified diff 格式，例如：
-    ```
-    --- index.html
-    +++ index.html
-    @@ -6,1 +6,1 @@
-    -    <title>Old Title</title>
-    +    <title>New Title</title>
-    ```
-
-    根據使用者的需求選擇正確的 language 參數：
-    - 'html': 用於修改頁面結構、文字內容、HTML 元素
-    - 'css': 用於修改樣式、顏色、佈局、字體等視覺效果
-    - 'js': 用於修改 JavaScript 功能、互動行為、動態效果
+    - session_id: 當前聊天會話 ID
+    - project_name: 專案名稱（可選）
     """
-    return diff_tool.diff_code(container_name, diff_code, language)
+    return ai_tool.edit_request(container_name, session_id, project_name)
 
 
 # ---------- Tool & Agent Management ---------- #
 
 def get_registered_tools() -> List[BaseTool]:
-    return [get_html_code, get_css_code, get_js_code, diff_code]
+    return [get_html_code, get_css_code, get_js_code, edit_request]
 
 
 def build_agent_with_tools(
@@ -79,65 +72,16 @@ All responses and explanations must be written in Traditional Chinese.
 
 When using tools that require a 'container_name' parameter, you MUST provide the container name.
 
-As an expert in the `patch` utility, you must follow these strict rules for the `diff_code` tool to prevent "malformed patch" errors.
+🔧 **主要工作流程**：
+1. 當使用者詢問或要求查看代碼時，使用對應的查看工具 (get_html_code, get_css_code, get_js_code)
+2. 當使用者要求修改、編輯、改進網頁時，直接使用 edit_request 工具
 
-**CRITICAL: Rules for `diff_code`**
+⚡ **重要指引**：
+- 如果使用者的請求涉及任何代碼修改、網頁編輯、樣式調整、功能添加等，請直接使用 edit_request 工具
+- edit_request 工具會自動處理所有必要的代碼變更，無需你手動生成 diff 或指定文件類型
+- 只有在使用者明確要求查看當前代碼內容時，才使用 get_* 系列工具
 
-1.  **HUNK HEADER `@@ ... @@` IS LAW**:
-    *   Format: `@@ -old_start,old_lines +new_start,new_lines @@`
-    *   This header dictates the entire change. `old_lines` is the count of original lines affected (removals + context). `new_lines` is the count for the new file (additions + context).
-    *   **Your line counts MUST BE PERFECT.**
-
-2.  **CONTEXT IS MANDATORY & NON-NEGOTIABLE**:
-    *   You MUST provide unchanged context lines (prefixed with a space ` `) before and after your changes.
-    *   `patch` uses context to find the location. No context, no patch.
-    *   A diff with only `+` (add) lines is almost always **WRONG** and will fail because `patch` does not know where to insert them.
-
-3.  **REMOVING & ADDING LINES**:
-    *   Remove a line with `-`: `- <p>Old</p>`
-    *   Add a line with `+`: `+ <p>New</p>`
-    *   To replace, use `-` then `+`.
-
-4.  **EVERY LINE REQUIRES A NEWLINE (`\n`)**:
-    *   The `patch unexpectedly ends in middle of line` error is caused by a missing `\n`.
-    *   The entire `diff_code` string MUST end with `\n`.
-
-**WORKFLOW & EXAMPLE**
-
-Goal: Change the `<title>` in the HTML.
-
-1.  **`get_html_code()`**: First, get the current code with line numbers.
-    ```
-    ...
-    4: <meta charset="UTF-8">
-    5: <title>Welcome My Website!</title>
-    6: </head>
-    ...
-    ```
-
-2.  **Analyze & Plan**:
-    *   **Change**: Replace line 5.
-    *   **Context**: Use line 4 as leading context and line 6 as trailing context.
-    *   **Hunk Header**: The change starts at line 4. It affects 3 lines in the original (`<meta>`, old `<title>`, `</head>`). It will also be 3 lines in the new version. So, `@@ -4,3 +4,3 @@`.
-
-3.  **Construct `diff_code`**:
-    ```
-    --- index.html
-    +++ index.html
-    @@ -4,3 +4,3 @@
-     <meta charset="UTF-8">
-    -    <title>Welcome My Website!</title>
-    +    <title>Hello World!</title>
-     </head>
-    ```
-    *Notice the space ` ` before context lines, `-` before removed, `+` before added. The indentation of the original file must be preserved.*
-
-Analyze the user's request to determine which file type should be modified:
-- Title, content, structure changes → 'html'
-- Visual appearance, styling changes → 'css' 
-- Interactive behavior, functionality → 'js'
-
-IMPORTANT: For CSS styling, **you should prefer using Tailwind CSS** utility classes for better consistency and aesthetics. Avoid writing plain or raw CSS whenever possible.
+IMPORTANT: For CSS styling preferences, the sub-agent will prefer using Tailwind CSS utility classes for better consistency and aesthetics.
 """
 
     if project_name:
@@ -151,32 +95,28 @@ IMPORTANT: For CSS styling, **you should prefer using Tailwind CSS** utility cla
 
         system_message += f"""
 You are currently working on the project '{project_name}'.
-For all tools that require a 'container_name' parameter, use '{container_name}' as the container name.
+For all tools that require parameters, the system will automatically provide the correct values.
 
-CRITICAL: When calling ANY tool, you MUST provide the container_name parameter with the value: '{container_name}'
+🎯 **可用工具說明**：
+- get_html_code(container_name): 查看 HTML 代碼及行數 - 自動使用 container_name='{container_name}'
+- get_css_code(container_name): 查看 CSS 代碼及行數 - 自動使用 container_name='{container_name}'
+- get_js_code(container_name): 查看 JavaScript 代碼及行數 - 自動使用 container_name='{container_name}'
+- edit_request(container_name, session_id, project_name): 執行代碼編輯任務 - 系統自動填入所有參數
 
-Available tools:
-- get_html_code(container_name): Gets HTML code with line numbers from the container - MUST use container_name='{container_name}'
-- get_css_code(container_name): Gets CSS code with line numbers from the container - MUST use container_name='{container_name}'
-- get_js_code(container_name): Gets JavaScript code with line numbers from the container - MUST use container_name='{container_name}'
-- diff_code(container_name, diff_code, language): Applies UNIFIED diff patches to container files - MUST use container_name='{container_name}'
+📝 **使用範例**：
+- 查看 HTML：get_html_code(container_name='{container_name}')
+- 執行編輯任務：edit_request(container_name='{container_name}', session_id='current_session', project_name='{project_name}')
 
-EXAMPLES:
-- To get HTML with line numbers: get_html_code(container_name='{container_name}')
-- To apply a diff, follow the detailed workflow in the main instructions. A valid example is:
-  diff_code(container_name='{container_name}', diff_code='--- index.html\\n+++ index.html\\n@@ -4,3 +4,3 @@\\n <meta charset="UTF-8">\\n-    <title>Welcome My Website!</title>\\n+    <title>Hello World!</title>\\n </head>', language='html')
+🚀 **編輯任務工作流程**：
+1. 當使用者要求修改時，直接調用 edit_request 工具
+2. 系統會自動：
+   - 分析使用者請求
+   - 生成修改計劃
+   - 執行所有必要的代碼變更
+   - 回報結果
+3. 你只需要向使用者解釋執行結果即可
 
-WORKFLOW for making changes:
-1. First call get_html_code(container_name='{container_name}') to see current content with line numbers
-2. Identify the exact line numbers to modify AND the surrounding context lines
-3. Calculate hunk header: count original lines (including context) and new lines (including context)
-4. Create unified diff format with proper context lines before and after changes
-5. Ensure diff ends with newline and uses correct prefixes ('-', '+', ' ')
-6. Apply with diff_code(container_name='{container_name}', diff_code='...', language='html')
-
-CRITICAL: Always include 1-3 context lines before and after your changes, and ensure line counts in hunk header are accurate!
-
-Remember: ALWAYS provide the container_name='{container_name}' parameter when calling these tools.
+⚠️ **重要**：edit_request 工具的所有參數都會由系統自動填入，你不需要猜測或指定 session_id 和 project_name 的具體值。
 """
     else:
         system_message += """
@@ -420,7 +360,7 @@ def chat_with_ai(
 
     agent_executor = build_agent_with_tools(tools, project_name)
 
-    # 包裝工具以捕獲調用過程
+    # 包裝工具以捕獲調用過程並自動注入參數
     original_tools = agent_executor.tools
     wrapped_tools = []
 
@@ -428,6 +368,14 @@ def chat_with_ai(
         def create_wrapped_tool(original_tool):
             def wrapped_func(*args, **kwargs):
                 print(f"[TOOL_CALL] 開始調用工具: {original_tool.name}")
+
+                # 特殊處理 edit_request 工具，自動注入參數
+                if original_tool.name == 'edit_request':
+                    # 自動填入 session_id 和 project_name
+                    kwargs['session_id'] = session_id
+                    kwargs['project_name'] = project_name
+                    print(f"[TOOL_CALL] edit_request 自動注入參數: session_id={session_id}, project_name={project_name}")
+
                 print(f"[TOOL_CALL] 參數: args={args}, kwargs={kwargs}")
                 try:
                     result = original_tool.func(*args, **kwargs)
@@ -501,18 +449,45 @@ def chat_with_ai_stream(
         'get_html_code': '正在讀取 HTML 代碼...',
         'get_css_code': '正在讀取 CSS 代碼...',
         'get_js_code': '正在讀取 JavaScript 代碼...',
-        'diff_code': '正在套用代碼變更...'
+        'edit_request': '正在執行代碼編輯任務...'
     }
 
-    # 為了避免遞迴問題，我們使用一個簡單的回調包裝方式
-    # 保存原始工具，然後在執行時進行狀態回調
+    # 包裝工具以自動注入參數
+    original_tools = agent_executor.tools
+    wrapped_tools = []
+
+    for tool in original_tools:
+        def create_wrapped_tool(original_tool):
+            def wrapped_func(*args, **kwargs):
+                # 特殊處理 edit_request 工具，自動注入參數
+                if original_tool.name == 'edit_request':
+                    kwargs['session_id'] = session_id
+                    kwargs['project_name'] = project_name
+                    if status_callback:
+                        status_callback("正在執行代碼編輯任務...")
+
+                return original_tool.func(*args, **kwargs)
+
+            # 保持原有的工具屬性
+            wrapped_func.name = original_tool.name
+            wrapped_func.description = original_tool.description
+            return wrapped_func
+
+        # 建立包裝後的工具
+        from langchain.tools import tool as tool_decorator
+        wrapped_tool = tool_decorator(
+            description=tool.description
+        )(create_wrapped_tool(tool))
+        wrapped_tool.name = tool.name
+        wrapped_tools.append(wrapped_tool)
+
+    # 更新 agent_executor 的工具
+    agent_executor.tools = wrapped_tools
+
     if status_callback:
         status_callback("AI 正在分析您的請求...")
 
     print("[AI_CHAT_STREAM] 開始執行 agent...")
-
-    # 我們不再包裝工具，直接使用原始的 agent_executor
-    # 這避免了遞迴問題，狀態更新將通過其他方式處理
     response = agent_executor.invoke(
         {
             "input": user_input,

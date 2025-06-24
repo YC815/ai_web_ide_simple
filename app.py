@@ -16,8 +16,9 @@ from Functions.ai_chat import (
 )
 from Functions.log_config import setup_logging, get_logger
 
-# 設定日誌
-setup_logging()
+# 設定日誌模式 - 可透過變數控制
+log_to_file = False
+setup_logging(log_to_file=log_to_file)
 logger = get_logger(__name__)
 
 

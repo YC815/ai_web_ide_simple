@@ -9,27 +9,40 @@ if not os.path.exists(LOG_DIR):
 log_file_path = os.path.join(LOG_DIR, "ai_web_ide.log")
 
 
-def setup_logging():
+def setup_logging(log_to_file=True):
     """
-    設定一個集中式的日誌記錄器，將日誌寫入一個會自動輪替的檔案中。
+    設定日誌記錄器，支援檔案模式或終端機模式。
+
+    Args:
+        log_to_file (bool): 
+            True - 將日誌輸出到檔案 (預設)
+            False - 將日誌輸出到終端機
     """
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    # 避免重複添加 handlers
-    if any(isinstance(h, RotatingFileHandler) and h.baseFilename == log_file_path for h in logger.handlers):
-        return
+    # 清除現有的處理器以避免重複
+    logger.handlers.clear()
 
-    # 建立一個輪替檔案處理器
-    # 當日誌檔案達到 10MB 時會輪替，並保留 5 個舊的日誌檔案。
-    handler = RotatingFileHandler(log_file_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding='utf-8')
-
-    # 建立格式化器並為處理器設定
-    formatter = logging.Formatter('%(asctime)s - %(name)s - [%(levelname)s] - %(message)s')
-    handler.setFormatter(formatter)
-
-    # 將處理器添加到根日誌記錄器
-    logger.addHandler(handler)
+    if log_to_file:
+        # 檔案模式：將日誌寫入輪替檔案
+        handler = RotatingFileHandler(
+            log_file_path,
+            maxBytes=10 * 1024 * 1024,  # 10MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+        formatter = logging.Formatter('%(asctime)s - %(name)s - [%(levelname)s] - %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        print(f"✓ 日誌模式：檔案輸出 - 日誌將儲存至 {log_file_path}")
+    else:
+        # 終端機模式：將日誌輸出到控制台
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s - %(name)s - [%(levelname)s] - %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        print("✓ 日誌模式：終端機輸出")
 
 
 def get_logger(name):
